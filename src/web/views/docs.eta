@@ -205,7 +205,7 @@
       <div class="code" x-data="{ copied:false }">
         <button type="button" class="code-copy" @click="navigator.clipboard.writeText($refs.c.innerText); copied=true; setTimeout(()=>copied=false,1500)" x-text="copied?'Copiado!':'Copiar'"></button>
         <pre x-ref="c"><code>const src = qrCode.startsWith('data:') ? qrCode : `data:image/png;base64,${qrCode}`;
-// <img src={src} alt="QR Code" /></code></pre>
+// &lt;img src={src} alt="QR Code" /&gt;</code></pre>
       </div>
       <p class="muted" style="margin-top:8px">
         Peça pro dono do número abrir o WhatsApp → <strong>Aparelhos conectados</strong> →
