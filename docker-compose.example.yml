@@ -1,12 +1,12 @@
-# Example stack: app + PostgreSQL + Redis (Evolution API and WuzAPI optional).
+# Stack de exemplo: app + PostgreSQL + Redis (Evolution API e WuzAPI opcionais).
 #
-#   cp .env.example .env            # then fill in the secrets
+#   cp .env.example .env            # depois preencha os segredos
 #   docker compose -f docker-compose.example.yml up -d --build
-#   docker compose -f docker-compose.example.yml --profile evolution up -d   # optional provider
+#   docker compose -f docker-compose.example.yml --profile evolution up -d   # provedor opcional
 #
-# The `migrate` service applies the database migrations once, then the app starts.
-# Secrets come from .env (POSTGRES_PASSWORD, EVOLUTION_API_KEY, WUZAPI_ADMIN_TOKEN):
-# compose refuses to start the database without POSTGRES_PASSWORD.
+# O serviço `migrate` aplica as migrations do banco uma vez; depois o app inicia.
+# Os segredos vêm do .env (POSTGRES_PASSWORD, EVOLUTION_API_KEY, WUZAPI_ADMIN_TOKEN):
+# o compose se recusa a subir o banco sem POSTGRES_PASSWORD.
 
 services:
   postgres:
@@ -14,7 +14,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: apienvios
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
       POSTGRES_DB: apienvios
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -71,13 +71,13 @@ services:
       redis:
         condition: service_healthy
 
-  # --- Optional WhatsApp providers (enable with --profile evolution / wuzapi) ---
+  # --- Provedores de WhatsApp opcionais (ative com --profile evolution / wuzapi) ---
   evolution:
     profiles: ['evolution']
     image: evoapicloud/evolution-api:latest
     restart: unless-stopped
     environment:
-      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?set EVOLUTION_API_KEY in .env}
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina EVOLUTION_API_KEY no .env}
     ports:
       - '8080:8080'
 
@@ -86,7 +86,7 @@ services:
     image: asternic/wuzapi:latest
     restart: unless-stopped
     environment:
-      WUZAPI_ADMIN_TOKEN: ${WUZAPI_ADMIN_TOKEN:?set WUZAPI_ADMIN_TOKEN in .env}
+      WUZAPI_ADMIN_TOKEN: ${WUZAPI_ADMIN_TOKEN:?defina WUZAPI_ADMIN_TOKEN no .env}
     ports:
       - '8888:8080'
 

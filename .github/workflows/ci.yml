@@ -7,32 +7,44 @@ on:
 
 jobs:
   test:
+    name: testes (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
         node-version: [20, 22]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Baixar o código
+        uses: actions/checkout@v4
+      - name: Configurar o Node
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
-      - run: npm ci
-      - run: npx prisma generate
-      - run: npx prisma validate
+      - name: Instalar dependências
+        run: npm ci
+      - name: Gerar o Prisma Client
+        run: npx prisma generate
+      - name: Validar o schema do Prisma
+        run: npx prisma validate
         env:
           DATABASE_URL: postgresql://localhost:5432/db
           DIRECT_DATABASE_URL: postgresql://localhost:5432/db
-      - run: npm run build
-      - run: npm run docs:mcp-tools:check
-      - run: npm test
+      - name: Build (checagem de tipos + compilação)
+        run: npm run build
+      - name: Conferir a referência das tools do MCP
+        run: npm run docs:mcp-tools:check
+      - name: Rodar os testes
+        run: npm test
 
   secret-scan:
+    name: varredura de segredos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Baixar o código (histórico completo)
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,207 +1,207 @@
 # Api-WhatsApp-MCP (ApiEnvios)
 
-Open-source, **multi-tenant WhatsApp sending platform** with a **number pool per
-instance**, **opt-in fallback across three providers**, anti-ban / anti-flood
-protection, a web admin panel, a REST API and a **remote MCP server** (OAuth 2.1)
-so AI assistants such as Claude can manage the account and even chat over WhatsApp.
+Plataforma de envio de WhatsApp **multi-tenant** e de código aberto, com **pool de números por
+instância**, **fallback opcional entre três provedores**, proteção anti-ban e anti-flood,
+painel web de administração, API REST e um **servidor MCP remoto** (OAuth 2.1) para que
+assistentes de IA, como o Claude, gerenciem a conta e até conversem pelo WhatsApp.
 
 Stack: Node 20+ · TypeScript · Fastify 5 · Prisma 5 (PostgreSQL 16) · Redis 7 + BullMQ ·
-Zod · Pino · Eta + Alpine.js (panel) · Vitest · Docker.
+Zod · Pino · Eta + Alpine.js (painel) · Vitest · Docker.
 
-> Status: `0.1.0`, extracted from a production system. APIs may still change before `1.0`.
+> Status: `0.1.0`, extraído de um sistema em produção. As APIs ainda podem mudar antes da `1.0`.
 
-## Architecture
+## Arquitetura
 
 ```
-Account (ApiClient / tenant)
-  ├── Users (OWNER / MEMBER)            ── JWT login (panel / API)
-  └── Instances                         ── one "instance" = a POOL of numbers
-        └── Numbers (InstanceNumber)    ── each number = one real provider session
-              ├── 1. Evolution API   (text/media, primary)
-              ├── 2. WuzAPI          (text/media + buttons, location, contact, polls, lists)
-              └── 3. WhatsApp Cloud  (official, paid fallback)
+Conta (ApiClient / tenant)
+  ├── Usuários (OWNER / MEMBER)         ── login com JWT (painel / API)
+  └── Instâncias                        ── uma "instância" = um POOL de números
+        └── Números (InstanceNumber)    ── cada número = uma sessão real em um provedor
+              ├── 1. Evolution API   (texto/mídia, principal)
+              ├── 2. WuzAPI          (texto/mídia + botões, localização, contato, enquetes, listas)
+              └── 3. WhatsApp Cloud  (oficial, fallback pago)
 ```
 
-You send to an **instance** and the router picks the best **CONNECTED** number
-(anti-ban rotation), preferring a **WuzAPI** number when the payload needs rich
-features (buttons / location / contact / poll / list). Evolution and Cloud API do
-not support those types and fail explicitly (they never silently degrade to
-text). A detected ban marks the number `BANNED` and fires a webhook.
+Você envia para uma **instância** e o roteador escolhe o melhor número **CONNECTED**
+(rodízio anti-ban), preferindo um número **WuzAPI** quando o conteúdo exige recursos ricos
+(botões / localização / contato / enquete / lista). Evolution e Cloud API não suportam esses
+tipos e falham de forma explícita (nunca degradam em silêncio para texto). Quando um ban é
+detectado, o número passa para `BANNED` e um webhook é disparado.
 
-## Authentication and roles
+## Autenticação e papéis
 
-| Authentication | Header | Used for |
+| Autenticação | Cabeçalho | Uso |
 |---|---|---|
-| **Instance token** | `Token: <token>` | Client apps sending through one specific instance |
-| **Account API key** | `x-api-key: <key>` | Multi-instance management (instance chosen in the body) |
-| **JWT (human login)** | `Authorization: Bearer <jwt>` or panel cookie | People (panel / API / MCP), with a role |
+| **Token da instância** | `Token: <token>` | Aplicações cliente que enviam por uma instância específica |
+| **API key da conta** | `x-api-key: <chave>` | Gerenciamento de várias instâncias (a instância vai no corpo) |
+| **JWT (login humano)** | `Authorization: Bearer <jwt>` ou cookie do painel | Pessoas (painel / API / MCP), com um papel |
 
-| Resource | MEMBER | OWNER (account owner) | Super admin |
+| Recurso | MEMBER | OWNER (dono da conta) | Super admin |
 |---|:---:|:---:|:---:|
-| Send / campaigns / status | yes (own instances) | yes (account) | yes (global) |
-| See instances | only **their own** (`ownerUserId`) | all in the account | all |
-| Metrics | their instances | account | account |
-| Create / edit / delete instance | own | account | any |
-| Assign instance owner | no | yes | yes |
-| Manage members (`/v1/account/users`) | no | yes (MEMBER only) | yes |
-| Account webhooks | — | yes | yes |
-| Admin: accounts / users / global instances (`/v1/admin/*`) | no | no | yes |
+| Enviar / campanhas / status | sim (instâncias próprias) | sim (conta) | sim (global) |
+| Ver instâncias | só as **suas** (`ownerUserId`) | todas da conta | todas |
+| Métricas | suas instâncias | conta | conta |
+| Criar / editar / apagar instância | próprias | conta | qualquer |
+| Atribuir dono de instância | não | sim | sim |
+| Gerenciar membros (`/v1/account/users`) | não | sim (somente MEMBER) | sim |
+| Webhooks da conta | — | sim | sim |
+| Admin: contas / usuários / instâncias globais (`/v1/admin/*`) | não | não | sim |
 
-## Quick start
+## Início rápido
 
-### With Docker Compose
+### Com Docker Compose
 
 ```bash
 git clone https://github.com/Otavio1661/Api-WhatsApp-MCP.git && cd Api-WhatsApp-MCP
 cp .env.example .env
-# Fill in API_SECRET, JWT_SECRET, SECRETS_ENCRYPTION_KEY (openssl rand -base64 32)
-# and POSTGRES_PASSWORD (openssl rand -hex 24)
+# Preencha API_SECRET, JWT_SECRET, SECRETS_ENCRYPTION_KEY (openssl rand -base64 32)
+# e POSTGRES_PASSWORD (openssl rand -hex 24)
 docker compose -f docker-compose.example.yml up -d --build
 ```
 
-The API and the panel listen on `http://localhost:3000` (panel at `/admin`).
-Create the first admin by setting `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` and
-running `npm run db:seed` from a checkout pointed at the same database (the production
-image does not ship the dev toolchain). See [docs/self-hosting.md](docs/self-hosting.md).
+A API e o painel respondem em `http://localhost:3000` (painel em `/admin`).
+Crie o primeiro administrador definindo `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` e
+rodando `npm run db:seed` a partir de um checkout apontado para o mesmo banco (a imagem de
+produção não traz as ferramentas de desenvolvimento). Veja [docs/self-hosting.md](docs/self-hosting.md).
 
-### Local development
+### Desenvolvimento local
 
 ```bash
 npm install
 cp .env.example .env                 # DATABASE_URL, REDIS_*, JWT_SECRET, API_SECRET, SECRETS_ENCRYPTION_KEY...
 docker compose -f docker-compose.example.yml up -d postgres redis
 npx prisma migrate deploy && npx prisma generate
-npm run db:seed                      # DEV ONLY: fictional demo data (see prisma/seed.ts)
+npm run db:seed                      # SOMENTE DEV: dados fictícios de demonstração (veja prisma/seed.ts)
 npm run dev
 ```
 
-## Web panel (`/admin`)
+## Painel web (`/admin`)
 
-JWT login (httpOnly cookie). Screens by role: **Instances** (status derived from the
-pool), **Docs** (API reference filtered by role), **Team** (OWNER: members and instance
-owners) and **Administration** (super admin: accounts and users).
+Login com JWT (cookie httpOnly). Telas por papel: **Instâncias** (status derivado do
+pool), **Docs** (referência da API filtrada por papel), **Equipe** (OWNER: membros e donos
+de instâncias) e **Administração** (super admin: contas e usuários).
 
-## REST API (summary)
+## API REST (resumo)
 
 ```
 POST /v1/instance/:id/messages/chat     { to, body }
 POST /v1/instance/:id/messages/media    { to, type, mediaUrl, caption }
 POST /v1/messages                       { to, type, text|mediaUrl, instanceId?, scheduledAt? }
 POST /v1/campaigns                      { to:[...], text|mediaUrl, instanceId?, externalIdPrefix? }
-GET  /v1/messages/:id                   message status
-GET  /v1/messages?status=&page=&limit=  history
+GET  /v1/messages/:id                   status da mensagem
+GET  /v1/messages?status=&page=&limit=  histórico
 GET/POST/PATCH/DELETE /v1/instances[/:id]   (+ /connect, /qr, /status, /numbers ...)
 GET  /v1/metrics?days=30
 POST /v1/webhooks                       { url, events[], secret? }
-GET/POST/PATCH/DELETE /v1/account/users (OWNER) manage MEMBERs
-GET/POST/PATCH/DELETE /v1/admin/...     (super admin) accounts, users, global instances
+GET/POST/PATCH/DELETE /v1/account/users (OWNER) gerencia MEMBERs
+GET/POST/PATCH/DELETE /v1/admin/...     (super admin) contas, usuários, instâncias globais
 GET  /health                            { status, version, uptimeSec, checks:{database,redis} }
 ```
 
-The panel serves the full, role-filtered reference at `/admin/docs`.
+O painel serve a referência completa, filtrada por papel, em `/admin/docs`.
 
 ## Webhooks
 
-Events: `BAN_DETECTED`, `NUMBER_DISCONNECTED`, `NUMBER_ROTATED`, `MESSAGE_FAILED`,
-`MESSAGE_DELIVERED`, `PROVIDER_DOWN`. Delivery is asynchronous with retry/backoff
-(BullMQ). With a `secret`, every POST carries:
+Eventos: `BAN_DETECTED`, `NUMBER_DISCONNECTED`, `NUMBER_ROTATED`, `MESSAGE_FAILED`,
+`MESSAGE_DELIVERED`, `PROVIDER_DOWN`. A entrega é assíncrona, com retry e backoff
+(BullMQ). Com um `secret`, todo POST leva:
 
 ```
-X-ApiEnvios-Event:     <event>
-X-ApiEnvios-Timestamp: <epoch ms>
-X-ApiEnvios-Signature: sha256=<HMAC-SHA256 of "<timestamp>.<body>">
+X-ApiEnvios-Event:     <evento>
+X-ApiEnvios-Timestamp: <epoch em ms>
+X-ApiEnvios-Signature: sha256=<HMAC-SHA256 de "<timestamp>.<corpo>">
 ```
 
-Validate by recomputing the HMAC over `${timestamp}.${rawBody}` with your secret.
-Webhook URLs are checked against SSRF (private, loopback and cloud-metadata
-addresses are rejected).
+Valide recalculando o HMAC sobre `${timestamp}.${rawBody}` com o seu secret.
+As URLs de webhook passam por uma verificação anti-SSRF (endereços privados, de loopback e
+de metadados de nuvem são rejeitados).
 
-## Anti-ban and anti-flood
+## Anti-ban e anti-flood
 
-- Per-instance send spacing (Redis lock + random delay).
-- Per-recipient hourly cap per account (`ApiClient.maxPerRecipientPerHour`, `0` = unlimited);
-  exceeding it returns `429 Retry-After` without queueing.
-- Warm-up for new numbers, automatic rotation on ban, daily limit per number.
+- Espaçamento de envio por instância (lock no Redis + atraso aleatório).
+- Limite por destinatário por hora, por conta (`ApiClient.maxPerRecipientPerHour`, `0` = sem limite);
+  ao excedê-lo, a API devolve `429 Retry-After` sem enfileirar.
+- Aquecimento de números novos, rotação automática em caso de ban e limite diário por número.
 
-## MCP server (AI assistants)
+## Servidor MCP (assistentes de IA)
 
-`POST /mcp` exposes **30 tools** (instances, messages, inbound messages, campaigns,
-webhooks, members, metrics) over Streamable HTTP (stateless) with **OAuth 2.1 + PKCE** and
-Dynamic Client Registration. Every tool calls the regular REST route with the logged-in
-user's JWT, so tenant scoping, role checks and anti-flood apply exactly as in the API. An
-optional **WhatsApp <-> assistant bridge** lets a connected assistant answer messages on
-your behalf (fully configurable).
+`POST /mcp` expõe **30 tools** (instâncias, mensagens, mensagens recebidas, campanhas,
+webhooks, membros, métricas) via Streamable HTTP (stateless) com **OAuth 2.1 + PKCE** e
+Dynamic Client Registration. Cada tool chama a rota REST normal com o JWT do usuário
+logado, então o isolamento por tenant, a checagem de papéis e o anti-flood valem exatamente
+como na API. Uma **ponte opcional WhatsApp <-> assistente** permite que um assistente
+conectado responda mensagens em seu nome (totalmente configurável).
 
-Quick start (replace the URL with your public HTTPS API URL):
+Início rápido (troque a URL pela URL HTTPS pública da sua API):
 
 ```bash
 # Claude Code
-claude mcp add --transport http apienvios https://api.example.com/mcp   # then run /mcp to log in
+claude mcp add --transport http apienvios https://api.example.com/mcp   # depois rode /mcp para fazer login
 
 # OpenAI Codex CLI
 codex mcp add apienvios --url https://api.example.com/mcp
 codex mcp login apienvios --oauth-client-registration dcr
 ```
 
-| Client | Status of the connection guide |
+| Cliente | Situação do guia de conexão |
 |---|---|
-| [Claude Code](docs/mcp/clients/claude-code.md) | Verified against the vendor docs |
-| [claude.ai / Claude Desktop](docs/mcp/clients/claude-ai-desktop.md) | Verified against the vendor docs |
-| [OpenAI Codex](docs/mcp/clients/codex.md) | Verified against the vendor docs |
-| [Cursor](docs/mcp/clients/cursor.md) | Verified; the vendor says DCR is unsupported, workaround untested |
-| [Windsurf](docs/mcp/clients/windsurf.md), [Gemini CLI](docs/mcp/clients/gemini-cli.md), [Zed](docs/mcp/clients/zed.md) | Verified against the vendor docs |
-| [ChatGPT](docs/mcp/clients/chatgpt.md), [VS Code](docs/mcp/clients/vscode.md), [Cline](docs/mcp/clients/cline.md), [Continue](docs/mcp/clients/continue.md) | Partial (some points unconfirmed) |
-| [Any stdio-only client](docs/mcp/clients/mcp-remote.md) | Via the `mcp-remote` bridge |
+| [Claude Code](docs/mcp/clients/claude-code.md) | Verificado na documentação do fabricante |
+| [claude.ai / Claude Desktop](docs/mcp/clients/claude-ai-desktop.md) | Verificado na documentação do fabricante |
+| [OpenAI Codex](docs/mcp/clients/codex.md) | Verificado na documentação do fabricante |
+| [Cursor](docs/mcp/clients/cursor.md) | Verificado; o fabricante diz que DCR não é suportado, contorno não testado |
+| [Windsurf](docs/mcp/clients/windsurf.md), [Gemini CLI](docs/mcp/clients/gemini-cli.md), [Zed](docs/mcp/clients/zed.md) | Verificado na documentação do fabricante |
+| [ChatGPT](docs/mcp/clients/chatgpt.md), [VS Code](docs/mcp/clients/vscode.md), [Cline](docs/mcp/clients/cline.md), [Continue](docs/mcp/clients/continue.md) | Parcial (alguns pontos não confirmados) |
+| [Qualquer cliente só com stdio](docs/mcp/clients/mcp-remote.md) | Pela ponte `mcp-remote` |
 
-Full documentation (Brazilian Portuguese, with an [English summary](docs/en/mcp-overview.md)):
-[how it works](docs/mcp/overview.md), [connect a client](docs/mcp/connect.md),
-[tool reference](docs/mcp-tools.md), [security](docs/mcp/security.md),
-[troubleshooting](docs/mcp/troubleshooting.md) and [examples](docs/mcp/examples.md).
+Documentação completa: [como funciona](docs/mcp/overview.md),
+[conectar um cliente](docs/mcp/connect.md), [referência das tools](docs/mcp-tools.md),
+[segurança](docs/mcp/security.md), [solução de problemas](docs/mcp/troubleshooting.md) e
+[exemplos](docs/mcp/examples.md).
 
-## Secrets encrypted at rest
+## Segredos criptografados em repouso
 
-`Instance.token`, `Instance.webhookSecret` and `ApiClient.apiKey` are live credentials that
-must be shown in clear text in the panel/API after creation, so they are protected with
-reversible symmetric encryption (AES-256-GCM) instead of a hash:
+`Instance.token`, `Instance.webhookSecret` e `ApiClient.apiKey` são credenciais ativas que
+precisam ser exibidas em texto claro no painel/API após a criação, por isso são protegidas
+com criptografia simétrica reversível (AES-256-GCM) em vez de hash:
 
-- Implementation in `src/utils/secrets-crypto.ts`: random IV per value, stored as
-  `iv:tag:ciphertext` (base64). The master key comes from `SECRETS_ENCRYPTION_KEY`
-  (`openssl rand -base64 32`), never from the schema, migrations or git.
-- A **blind index** (`tokenHash` / `apiKeyHash`, HMAC-SHA256 derived from the master key)
-  lets the auth middleware look credentials up without decrypting every row.
-- Without `SECRETS_ENCRYPTION_KEY`, creating a new instance or tenant fails.
+- Implementação em `src/utils/secrets-crypto.ts`: IV aleatório por valor, armazenado como
+  `iv:tag:ciphertext` (base64). A chave mestra vem de `SECRETS_ENCRYPTION_KEY`
+  (`openssl rand -base64 32`), nunca do schema, das migrations nem do git.
+- Um **blind index** (`tokenHash` / `apiKeyHash`, HMAC-SHA256 derivado da chave mestra)
+  permite ao middleware de autenticação localizar credenciais sem descriptografar todas as linhas.
+- Sem `SECRETS_ENCRYPTION_KEY`, a criação de uma nova instância ou tenant falha.
 
-## Pluggable external login (optional)
+## Login externo plugável (opcional)
 
-By default users authenticate with a local bcrypt hash. To delegate passwords to another
-system (LDAP, SSO, an internal identity service), register an `ExternalAuthProvider`
-(`src/services/external-auth.ts`) at startup and set `User.externalId` on the matching
-users. A user with an `externalId` and no registered provider cannot log in.
+Por padrão, os usuários se autenticam com um hash bcrypt local. Para delegar as senhas a
+outro sistema (LDAP, SSO, um serviço de identidade interno), registre um `ExternalAuthProvider`
+(`src/services/external-auth.ts`) na inicialização e defina `User.externalId` nos usuários
+correspondentes. Um usuário com `externalId` e sem provider registrado não consegue entrar.
 
-## Documentation
+## Documentação
 
-- [docs/self-hosting.md](docs/self-hosting.md) — deploy, reverse proxy, upgrades, backups
-- [docs/configuration.md](docs/configuration.md) — every environment variable
+- [docs/self-hosting.md](docs/self-hosting.md) — deploy, proxy reverso, atualizações, backups
+- [docs/configuration.md](docs/configuration.md) — todas as variáveis de ambiente
 - [docs/providers.md](docs/providers.md) — Evolution API, WuzAPI, WhatsApp Cloud API
-- [docs/mcp/overview.md](docs/mcp/overview.md) — MCP: how it works, OAuth flow, sessions, limits, WhatsApp bridge (pt-BR; [English summary](docs/en/mcp-overview.md))
-- [docs/mcp/connect.md](docs/mcp/connect.md) — connect Claude Code, Codex, Cursor, Gemini CLI and more
-- [docs/mcp-tools.md](docs/mcp-tools.md) — reference of the 30 tools (generated from the code)
+- [docs/mcp/overview.md](docs/mcp/overview.md) — MCP: como funciona, fluxo OAuth, sessões, limites, ponte WhatsApp
+- [docs/mcp/connect.md](docs/mcp/connect.md) — conectar Claude Code, Codex, Cursor, Gemini CLI e outros
+- [docs/mcp-tools.md](docs/mcp-tools.md) — referência das 30 tools (gerada a partir do código)
 - [docs/mcp/security.md](docs/mcp/security.md), [docs/mcp/troubleshooting.md](docs/mcp/troubleshooting.md), [docs/mcp/examples.md](docs/mcp/examples.md)
-- [docs/security.md](docs/security.md) — security model and hardening checklist
+- [docs/security.md](docs/security.md) — modelo de segurança e checklist de hardening
 
-## Tests
+## Testes
 
 ```bash
-npm test          # vitest (unit + integration with mocked Prisma/Redis; no infrastructure needed)
-npm run build     # type-check + compile
-npm run docs:mcp-tools:check   # fails if docs/mcp-tools.md is out of date (regenerate with npm run docs:mcp-tools)
+npm test          # vitest (unitários + integração com Prisma/Redis simulados; não precisa de infraestrutura)
+npm run build     # checagem de tipos + compilação
+npm run docs:mcp-tools:check   # falha se docs/mcp-tools.md estiver desatualizado (regenere com npm run docs:mcp-tools)
 ```
 
-## Contributing and security
+## Contribuição e segurança
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Please report
-vulnerabilities privately, never in a public issue.
+Veja [CONTRIBUTING.md](CONTRIBUTING.md) e [SECURITY.md](SECURITY.md). Relate
+vulnerabilidades de forma privada, nunca em uma issue pública.
 
-## License
+## Licença
 
 [Apache-2.0](LICENSE).

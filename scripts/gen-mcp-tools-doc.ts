@@ -1,12 +1,12 @@
 // scripts/gen-mcp-tools-doc.ts
-// Generates docs/mcp-tools.md from the real tool definitions in src/mcp/tools/*.
+// Gera docs/mcp-tools.md a partir das definições reais das tools em src/mcp/tools/*.
 //
-//   npm run docs:mcp-tools          -> rewrites docs/mcp-tools.md
-//   npm run docs:mcp-tools:check    -> exits 1 if the file is out of date (use in CI)
+//   npm run docs:mcp-tools          -> reescreve docs/mcp-tools.md
+//   npm run docs:mcp-tools:check    -> sai com código 1 se o arquivo estiver desatualizado (use no CI)
 //
-// Names, descriptions and parameters come from the zod shapes that are registered
-// on the MCP server. The REST route behind each tool is read from the tool source
-// (the `method:` / `url:` of its callApi). Nothing here needs a database or Redis.
+// Nomes, descrições e parâmetros vêm dos shapes do zod registrados no servidor MCP.
+// A rota REST por trás de cada tool é lida do código-fonte da tool (o `method:` / `url:`
+// do seu callApi). Nada aqui precisa de banco de dados nem de Redis.
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'

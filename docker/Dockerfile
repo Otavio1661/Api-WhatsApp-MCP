@@ -1,10 +1,10 @@
-# Production image.
+# Imagem de produção.
 #
-# Multi-stage: the builder compiles TypeScript and generates the Prisma Client;
-# the final stage only has the result (dist/ + production node_modules), without
-# the build toolchain. Both stages use Alpine on purpose: the Prisma binaryTarget
-# `linux-musl-openssl-3.0.x` (prisma/schema.prisma) requires it, so the client
-# does not have to be regenerated in the final stage.
+# Multi-stage: o builder compila o TypeScript e gera o Prisma Client;
+# o estágio final só tem o resultado (dist/ + node_modules de produção), sem
+# as ferramentas de build. Os dois estágios usam Alpine de propósito: o binaryTarget
+# `linux-musl-openssl-3.0.x` do Prisma (prisma/schema.prisma) exige isso, então o
+# client não precisa ser gerado de novo no estágio final.
 
 FROM node:20-alpine AS builder
 WORKDIR /app
@@ -25,9 +25,9 @@ COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
-# tsc only compiles .ts: the Eta templates (.eta) and the panel's static CSS are
-# not TypeScript, so they are copied separately to the path the compiled code
-# expects (dist/web/{views,public}).
+# O tsc só compila .ts: os templates Eta (.eta) e o CSS estático do painel não são
+# TypeScript, então são copiados separadamente para o caminho que o código compilado
+# espera (dist/web/{views,public}).
 COPY --from=builder /app/src/web/views ./dist/web/views
 COPY --from=builder /app/src/web/public ./dist/web/public
 

@@ -1,18 +1,18 @@
-# Code of conduct
+# Código de conduta
 
-We want this project to be a welcoming, harassment-free space for everyone.
+Queremos que este projeto seja um espaço acolhedor e livre de assédio para todas as pessoas.
 
-**Expected behaviour**: be respectful and constructive; assume good intent; accept feedback
-gracefully; focus on what is best for the project and its users.
+**Comportamento esperado**: seja respeitoso e construtivo; presuma boa-fé; receba feedback com
+maturidade; foque no que é melhor para o projeto e para quem o usa.
 
-**Unacceptable behaviour**: harassment, insults or discriminatory language; personal attacks;
-publishing other people's private information; sustained disruption of discussions; any
-conduct that would be inappropriate in a professional setting.
+**Comportamento inaceitável**: assédio, insultos ou linguagem discriminatória; ataques pessoais;
+divulgar informações privadas de terceiros; perturbar discussões de forma reiterada; qualquer
+conduta que seria inadequada em um ambiente profissional.
 
-**Enforcement**: maintainers may edit or remove comments, issues and pull requests, and may
-temporarily or permanently ban contributors who violate this code. Report problems privately
-through GitHub (use the repository's private reporting channel or contact a maintainer on
-GitHub). All reports are handled confidentially.
+**Aplicação**: os mantenedores podem editar ou remover comentários, issues e pull requests, e
+podem banir temporária ou permanentemente quem violar este código. Relate problemas de forma
+privada pelo GitHub (use o canal de relato privado do repositório ou fale com um mantenedor no
+GitHub). Todos os relatos são tratados com confidencialidade.
 
-This text is adapted from the spirit of the
-[Contributor Covenant](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).
+Este texto é adaptado do espírito do
+[Contributor Covenant](https://www.contributor-covenant.org/pt-br/version/2/1/code_of_conduct/).

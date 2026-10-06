@@ -2,8 +2,6 @@
 
 O Api-WhatsApp-MCP traz um **servidor MCP remoto** (Model Context Protocol) dentro do mesmo processo da API. Um assistente de IA compatível com MCP remoto se autentica no navegador com a conta do próprio usuário e passa a operar instâncias, enviar mensagens, ler respostas e consultar métricas, sempre restrito àquela conta.
 
-Idioma: este guia é o principal. Há um resumo em inglês em [../en/mcp-overview.md](../en/mcp-overview.md).
-
 Para conectar um cliente específico (Claude Code, Codex, Cursor e outros), vá direto para [connect.md](connect.md). A referência das 30 tools está em [../mcp-tools.md](../mcp-tools.md).
 
 ## Visão geral

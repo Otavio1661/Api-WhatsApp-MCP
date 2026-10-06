@@ -1,7 +1,7 @@
 {
   "name": "api-whatsapp-mcp",
   "version": "0.1.0",
-  "description": "Multi-tenant WhatsApp sending API with multi-provider fallback, anti-flood protection and a remote MCP server.",
+  "description": "API de envio de WhatsApp multi-tenant com fallback entre provedores, proteção anti-flood e servidor MCP remoto.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -15,7 +15,10 @@
     "prisma",
     "multi-tenant",
     "evolution-api",
-    "wuzapi"
+    "wuzapi",
+    "oauth",
+    "anti-ban",
+    "envio-de-mensagens"
   ],
   "engines": {
     "node": ">=20"

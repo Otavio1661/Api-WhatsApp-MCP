@@ -1,28 +1,28 @@
-# Security policy
+# Política de segurança
 
-## Supported versions
+## Versões suportadas
 
-Only the latest release on `main` receives security fixes.
+Somente a versão mais recente na `main` recebe correções de segurança.
 
-## Reporting a vulnerability
+## Relatando uma vulnerabilidade
 
-Please **do not open a public issue**. Use GitHub's private vulnerability reporting
-(*Security* tab → *Report a vulnerability*) on this repository. Include:
+Por favor, **não abra uma issue pública**. Use o relato privado de vulnerabilidades do GitHub
+(aba *Security* → *Report a vulnerability*) neste repositório. Inclua:
 
-- a description of the problem and its impact,
-- steps to reproduce (or a proof of concept),
-- affected version / commit.
+- uma descrição do problema e do seu impacto,
+- passos para reproduzir (ou uma prova de conceito),
+- a versão / o commit afetado.
 
-You will get an acknowledgement as soon as a maintainer can review it. We ask for
-coordinated disclosure: please give us reasonable time to fix the issue before publishing.
+Você receberá uma confirmação assim que um mantenedor puder analisar o relato. Pedimos
+divulgação coordenada: dê-nos um prazo razoável para corrigir o problema antes de publicá-lo.
 
-## Scope
+## Escopo
 
-In scope: the API, the web panel, the MCP/OAuth server and the default Docker setup.
-Out of scope: vulnerabilities in third-party providers (Evolution API, WuzAPI, WhatsApp),
-and issues that require a malicious server administrator.
+Dentro do escopo: a API, o painel web, o servidor MCP/OAuth e a configuração Docker padrão.
+Fora do escopo: vulnerabilidades em provedores de terceiros (Evolution API, WuzAPI, WhatsApp)
+e problemas que exijam um administrador de servidor malicioso.
 
-## If you find a leaked secret
+## Se você encontrar um segredo vazado
 
-If you notice a credential, token or personal data accidentally committed to this
-repository, report it privately the same way so it can be rotated and removed.
+Se notar uma credencial, um token ou dados pessoais enviados por engano a este repositório,
+relate de forma privada, do mesmo modo, para que possam ser rotacionados e removidos.
