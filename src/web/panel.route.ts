@@ -7,6 +7,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../utils/prisma'
 import { config } from '../config'
+import { renderMcpDocs } from './mcp-docs'
 import { validarCredenciais } from '../services/credential-validation.service'
 import { normalizePhone } from '../utils/helpers'
 import { enqueueSend, requeueSend, removeSendJob, sendJobExists } from '../queues/send-message.queue'
@@ -559,6 +560,7 @@ export async function panelRoutes(app: FastifyInstance) {
     const sample = first
       ? { id: first.id, slug: first.slug, token: first.token }
       : { id: 'ID_DA_INSTANCIA', slug: 'slug-da-instancia', token: 'TOKEN_DA_INSTANCIA' }
+    const mcp = renderMcpDocs(config.app.apiPublicUrl)
     return renderPage(
       app,
       reply,
@@ -566,6 +568,9 @@ export async function panelRoutes(app: FastifyInstance) {
       {
         title: 'Documentação — ApiEnvios',
         apiBase: config.app.apiPublicUrl,
+        mcpUrl: `${config.app.apiPublicUrl.replace(/\/$/, '')}/mcp`,
+        mcpNavHtml: mcp.nav,
+        mcpHtml: mcp.html,
         apiKey: request.apiClient!.apiKey,
         sample,
         // Papel do usuário → controla quais seções aparecem (esconde o que não se aplica).

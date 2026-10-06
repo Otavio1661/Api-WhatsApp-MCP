@@ -1,7 +1,7 @@
 <div class="page-head">
   <div>
     <h1>Documentação da API</h1>
-    <p class="subtitle">Exemplos prontos para enviar mensagens pelas suas instâncias. Os trechos abaixo já usam os dados da sua conta.</p>
+    <p class="subtitle">Exemplos prontos para enviar mensagens pelas suas instâncias. Os trechos abaixo já usam os dados da sua conta. Para operar a conta com assistentes de IA (Claude Code, Codex e outros), veja a seção <a href="#mcp">MCP</a>.</p>
   </div>
 </div>
 
@@ -89,6 +89,13 @@
       <% } %>
 
       <li><a href="#insomnia" :class="ativo('insomnia')" x-show="bate('Insomnia Postman importar curl')">Insomnia / Postman</a></li>
+
+      <li>
+        <a href="#mcp" :class="ativo('mcp')" x-show="bate('MCP assistentes de IA Claude Code Codex Cursor conectar ferramentas')">MCP (assistentes de IA)</a>
+        <ul>
+          <%~ it.mcpNavHtml %>
+        </ul>
+      </li>
     </ul>
   </nav>
 
@@ -601,6 +608,38 @@ curl -X DELETE "<%= it.apiBase %>/v1/admin/instances/INST_ID" -H "x-api-key: <%=
       <h2>Insomnia / Postman</h2>
       <p class="muted">Copie qualquer exemplo <strong>cURL</strong> acima e cole no Insomnia (<em>Import → From Clipboard</em>) ou Postman (<em>Import → Raw text</em>). A ferramenta monta a requisição automaticamente — método, URL, headers e corpo.</p>
     </div>
+
+    <!-- MCP: assistentes de IA operando a conta (conteúdo gerado de docs/**/*.md) -->
+    <div class="card" id="mcp" x-show="bate($el.textContent)">
+      <h2>MCP: operar a conta com assistentes de IA</h2>
+      <p class="muted">
+        O ApiEnvios tem um servidor <strong>MCP</strong> (Model Context Protocol) no mesmo endereço da API.
+        Um assistente de IA se autentica no navegador com o seu e-mail e senha e passa a operar a sua conta
+        (instâncias, mensagens, respostas recebidas e métricas) com o seu papel e só dentro da sua conta.
+        As seções abaixo explicam como funciona, como conectar cada cliente e quais são as 30 ferramentas.
+      </p>
+      <p class="muted" style="margin-top:12px">URL do MCP deste ambiente:</p>
+      <div class="code" x-data="{ copied:false }">
+        <button type="button" class="code-copy" @click="navigator.clipboard.writeText($refs.c.innerText); copied=true; setTimeout(()=>copied=false,1500)" x-text="copied?'Copiado!':'Copiar'"></button>
+        <pre x-ref="c"><code><%= it.mcpUrl %></code></pre>
+      </div>
+      <p class="muted" style="margin-top:12px">Conexão rápida:</p>
+      <div class="code" x-data="{ copied:false }">
+        <button type="button" class="code-copy" @click="navigator.clipboard.writeText($refs.c.innerText); copied=true; setTimeout(()=>copied=false,1500)" x-text="copied?'Copiado!':'Copiar'"></button>
+        <pre x-ref="c"><code># Claude Code (depois, dentro dele, rode /mcp para autenticar no navegador)
+claude mcp add --transport http apienvios "<%= it.mcpUrl %>"
+
+# OpenAI Codex CLI
+codex mcp add apienvios --url "<%= it.mcpUrl %>"
+codex mcp login apienvios --oauth-client-registration dcr</code></pre>
+      </div>
+      <p class="muted" style="margin-top:12px">
+        Siga para <a href="#mcp-visao-geral">Visão geral</a>, <a href="#mcp-conectar">Conectar um cliente</a>
+        ou <a href="#mcp-ferramentas">Ferramentas</a>.
+      </p>
+    </div>
+
+    <%~ it.mcpHtml %>
 
   </div>
 </div>

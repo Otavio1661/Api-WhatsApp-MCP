@@ -36,7 +36,9 @@
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
     "docs:mcp-tools": "tsx scripts/gen-mcp-tools-doc.ts",
-    "docs:mcp-tools:check": "tsx scripts/gen-mcp-tools-doc.ts --check"
+    "docs:mcp-tools:check": "tsx scripts/gen-mcp-tools-doc.ts --check",
+    "docs:panel-mcp": "tsx scripts/gen-panel-mcp-docs.ts",
+    "docs:panel-mcp:check": "tsx scripts/gen-panel-mcp-docs.ts --check"
   },
   "dependencies": {
     "@fastify/compress": "^9.2.0",
@@ -66,6 +68,7 @@
   "devDependencies": {
     "@types/node": "^22.7.5",
     "@vitest/coverage-v8": "^2.1.9",
+    "marked": "^18.1.0",
     "prisma": "^5.22.0",
     "tsx": "^4.19.1",
     "typescript": "^5.6.3",
