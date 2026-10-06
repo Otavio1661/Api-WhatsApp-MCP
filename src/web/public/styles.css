@@ -322,3 +322,5 @@ code { background: #eef2f7; padding: 2px 6px; border-radius: 5px; font-size: 12p
 .mcp-doc .callout p:last-child { margin-bottom: 0; }
 .mcp-doc a { color: var(--blue); }
 .mcp-doc :not(pre) > code { overflow-wrap: anywhere; }
+.mcp-doc .code pre { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 84px; }
+.mcp-doc td:first-child code { white-space: nowrap; overflow-wrap: normal; }

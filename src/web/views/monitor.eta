@@ -231,7 +231,7 @@
       </tbody>
     </table>
     <div class="page-head" style="margin-top:12px" x-show="messagesTotal > 0">
-      <span class="muted" x-text="messagesTotal + ' mensagem' + (messagesTotal === 1 ? '' : 'ns') + ' no total · página ' + messagesPage + ' de ' + messagesTotalPages"></span>
+      <span class="muted" x-text="messagesTotal + (messagesTotal === 1 ? ' mensagem' : ' mensagens') + ' no total · página ' + messagesPage + ' de ' + messagesTotalPages"></span>
       <div style="display:flex;gap:8px">
         <button type="button" class="btn btn-ghost" @click="prevPage()" :disabled="messagesPage <= 1">← Anterior</button>
         <button type="button" class="btn btn-ghost" @click="nextPage()" :disabled="messagesPage >= messagesTotalPages">Próxima →</button>

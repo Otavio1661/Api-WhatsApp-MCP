@@ -41,7 +41,7 @@
   <div class="alert alert-error">Você atingiu o limite de <strong><%= it.account.maxInstances %></strong> instância(s) desta conta. Para criar mais, peça ao super admin para aumentar a quota.</div>
 <% } %>
 
-<div class="card api-key-card" x-data="{ full: <%~ JSON.stringify(it.account.apiKey) %>, revealed: false, copied: false }">
+<div class="card api-key-card" x-data="{ full: <%= JSON.stringify(it.account.apiKey) %>, revealed: false, copied: false }">
   <span class="muted">API key da conta</span>
   <code class="token-cell" x-text="revealed ? full : apMaskSecret(full)"></code>
   <button type="button" class="btn btn-ghost btn-sm" @click="revealed = !revealed" x-text="revealed ? 'Ocultar' : 'Mostrar'"></button>
@@ -71,7 +71,7 @@
           <td><span class="badge badge-<%= inst.connection %>"><%= inst.connection %></span></td>
           <td><code><%= inst.apiUrl %></code></td>
           <td><code><%= inst.id %></code></td>
-          <td x-data="{ full: <%~ JSON.stringify(inst.token) %>, revealed: false, copied: false }">
+          <td x-data="{ full: <%= JSON.stringify(inst.token) %>, revealed: false, copied: false }">
             <code class="token-cell" x-text="revealed ? full : apMaskSecret(full)"></code>
             <button type="button" class="btn btn-ghost btn-sm" @click="revealed = !revealed" x-text="revealed ? 'Ocultar' : 'Mostrar'"></button>
             <button type="button" class="btn btn-ghost btn-sm" @click="navigator.clipboard.writeText(full); copied = true; setTimeout(() => copied = false, 1500)" x-text="copied ? 'Copiado!' : 'Copiar'"></button>

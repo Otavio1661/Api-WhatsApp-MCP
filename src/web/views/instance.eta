@@ -161,7 +161,7 @@
 <div class="card">
   <div class="page-head" style="margin-bottom:8px">
     <h2 style="margin:0">Últimas mensagens</h2>
-    <span class="muted"><%= it.messagesTotal %> mensagem<%= it.messagesTotal === 1 ? '' : 'ns' %> no total</span>
+    <span class="muted"><%= it.messagesTotal %> <%= it.messagesTotal === 1 ? 'mensagem' : 'mensagens' %> no total</span>
   </div>
   <table class="instances-table">
     <thead>
