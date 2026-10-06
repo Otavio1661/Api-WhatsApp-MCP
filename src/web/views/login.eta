@@ -1,0 +1,202 @@
+<style>
+  /* ── Login screen with its own dark theme. Scoped to .ae-login so it does
+     not affect the rest of the panel (light/corporate by design). System
+     font stack only: no external font requests. ── */
+
+  .ae-login {
+    --ae-bg: #050912;
+    --ae-bg-2: #0a1020;
+    --ae-bg-3: #100a24;
+    --ae-text: #f2f4fb;
+    --ae-muted: rgba(242, 244, 251, 0.64);
+    --ae-muted-2: rgba(242, 244, 251, 0.42);
+    --ae-accent: #7c5cff;
+    --ae-accent-2: #3d7bff;
+    --ae-accent-3: #22d3ee;
+    --ae-grad: linear-gradient(135deg, #7c5cff 0%, #3d7bff 100%);
+    --ae-border: rgba(255, 255, 255, 0.10);
+    --ae-glow: rgba(124, 92, 255, 0.45);
+
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    overflow: hidden;
+    background: linear-gradient(160deg, var(--ae-bg) 0%, var(--ae-bg-2) 45%, var(--ae-bg-3) 100%);
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+    z-index: 1000;
+  }
+
+  /* Glows de ambiente — mesmo truque do site institucional (blobs
+     radiais desfocados), dá profundidade sem virar ruído visual. */
+  .ae-glow {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(90px);
+    pointer-events: none;
+  }
+  .ae-glow--1 { width: 480px; height: 480px; left: -140px; top: -120px; background: var(--ae-accent); opacity: 0.30; }
+  .ae-glow--2 { width: 420px; height: 420px; right: 8%; bottom: -160px; background: var(--ae-accent-2); opacity: 0.26; }
+  .ae-glow--3 { width: 320px; height: 320px; right: 22%; top: 8%; background: var(--ae-accent-3); opacity: 0.16; }
+
+  .ae-card {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 400px;
+    padding: 44px 36px 36px;
+    border-radius: 28px;
+    background: rgba(16, 14, 34, 0.55);
+    border: 1px solid var(--ae-border);
+    backdrop-filter: blur(22px) saturate(1.3);
+    -webkit-backdrop-filter: blur(22px) saturate(1.3);
+    box-shadow:
+      0 30px 80px rgba(0, 0, 0, 0.55),
+      0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+      0 1px 0 rgba(255, 255, 255, 0.08) inset;
+  }
+
+  .ae-brand-mark {
+    width: 44px;
+    height: 44px;
+    margin: 0 0 20px;
+    background: var(--ae-grad);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px var(--ae-glow);
+  }
+
+  .ae-title {
+    margin: 0;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+    font-weight: 800;
+    font-size: 30px;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+    color: var(--ae-text);
+  }
+
+  .ae-subtitle {
+    margin: 8px 0 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    background: var(--ae-grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .ae-tagline {
+    margin: 14px 0 28px;
+    font-size: 14px;
+    color: var(--ae-muted);
+  }
+
+  .ae-alert {
+    margin: 0 0 18px;
+    padding: 11px 14px;
+    border-radius: 12px;
+    font-size: 13.5px;
+    color: #ffd7d7;
+    background: rgba(220, 38, 38, 0.16);
+    border: 1px solid rgba(220, 38, 38, 0.35);
+  }
+
+  .ae-field { display: block; margin-bottom: 16px; }
+  .ae-field span {
+    display: block;
+    margin-bottom: 7px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ae-muted);
+  }
+  .ae-field input {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--ae-border);
+    background: rgba(255, 255, 255, 0.045);
+    color: var(--ae-text);
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+    font-size: 14.5px;
+    outline: none;
+    transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+  }
+  .ae-field input::placeholder { color: var(--ae-muted-2); }
+  .ae-field input:focus {
+    border-color: var(--ae-accent);
+    background: rgba(255, 255, 255, 0.07);
+    box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.25);
+  }
+
+  .ae-btn {
+    width: 100%;
+    margin-top: 6px;
+    padding: 13px 16px;
+    border: none;
+    border-radius: 12px;
+    background: var(--ae-grad);
+    color: #fff;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+    font-weight: 700;
+    font-size: 14.5px;
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    box-shadow: 0 12px 30px var(--ae-glow);
+    transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+  }
+  .ae-btn:hover { transform: translateY(-1px); box-shadow: 0 16px 38px var(--ae-glow); filter: brightness(1.06); }
+  .ae-btn:active { transform: translateY(0); }
+
+  @media (max-width: 480px) {
+    .ae-card { padding: 34px 24px 28px; }
+    .ae-title { font-size: 26px; }
+  }
+</style>
+
+<div class="ae-login">
+  <div class="ae-glow ae-glow--1"></div>
+  <div class="ae-glow ae-glow--2"></div>
+  <div class="ae-glow ae-glow--3"></div>
+
+  <div class="ae-card">
+    <div class="ae-brand-mark"></div>
+    <h1 class="ae-title">ApiEnvios</h1>
+    <% if (it.mcpClientName) { %>
+      <p class="ae-tagline">
+        Autorizar <strong><%= it.mcpClientName %></strong> a acessar sua conta via MCP
+        <% if (it.mcpRedirectHost) { %>
+          — o código de acesso será entregue a <strong><%= it.mcpRedirectHost %></strong>. Só continue se reconhecer esse endereço.
+        <% } %>
+      </p>
+    <% } else { %>
+      <p class="ae-tagline">Painel de gerenciamento de instâncias</p>
+    <% } %>
+
+    <% if (it.error) { %>
+      <div class="ae-alert"><%= it.error %></div>
+    <% } %>
+
+    <form method="POST" action="<%= it.formAction || '/admin/login' %>">
+      <% if (it.mcpPending) { %>
+        <input type="hidden" name="mcp_pending" value="<%= it.mcpPending %>" />
+      <% } %>
+      <label class="ae-field">
+        <span>E-mail</span>
+        <input type="email" name="email" required autofocus value="<%= it.email || '' %>" placeholder="voce@exemplo.com" />
+      </label>
+      <label class="ae-field">
+        <span>Senha</span>
+        <input type="password" name="password" required placeholder="••••••••" />
+      </label>
+      <button type="submit" class="ae-btn"><%= it.mcpClientName ? 'Autorizar' : 'Entrar' %></button>
+    </form>
+  </div>
+</div>

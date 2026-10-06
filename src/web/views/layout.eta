@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= it.title || 'ApiEnvios' %></title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/admin/assets/styles.css?v=<%= it.assetVersion %>" />
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script>
+    // Mascara valores sensíveis (tokens/API keys) mostrando só os últimos 4 caracteres.
+    window.apMaskSecret = function (value) {
+      if (!value) return value;
+      if (value.length <= 4) return '*'.repeat(value.length);
+      return '*'.repeat(value.length - 4) + value.slice(-4);
+    };
+  </script>
+</head>
+<body>
+  <% if (it.user) { %>
+  <header class="navbar">
+    <div class="navbar-inner">
+      <a href="/admin" class="brand"><span class="brand-mark"></span> ApiEnvios</a>
+      <nav class="nav-links">
+        <a href="/admin" class="nav-link <%= it.activeNav === 'instances' ? 'active' : '' %>">Instâncias</a>
+        <a href="/admin/monitor" class="nav-link <%= it.activeNav === 'monitor' ? 'active' : '' %>">Monitor</a>
+        <a href="/admin/docs" class="nav-link <%= it.activeNav === 'docs' ? 'active' : '' %>">Docs</a>
+        <% if (it.isOwner) { %>
+        <a href="/admin/team" class="nav-link <%= it.activeNav === 'team' ? 'active' : '' %>">Time</a>
+        <a href="/admin/webhooks" class="nav-link <%= it.activeNav === 'webhooks' ? 'active' : '' %>">Webhooks</a>
+        <% } %>
+        <% if (it.isAdmin) { %>
+        <a href="/admin/manage" class="nav-link <%= it.activeNav === 'manage' ? 'active' : '' %>">Administração</a>
+        <% } %>
+      </nav>
+      <div class="nav-user">
+        <span class="user-email"><%= it.user.email %></span>
+        <form method="POST" action="/admin/logout" class="inline">
+          <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--navy-fg)">Sair</button>
+        </form>
+      </div>
+    </div>
+  </header>
+  <% } %>
+  <main class="container">
+    <%~ it.body %>
+  </main>
+  <% if (it.user) { %>
+  <footer class="app-footer">ApiEnvios · plataforma de envios WhatsApp</footer>
+  <% } %>
+</body>
+</html>

@@ -1,0 +1,141 @@
+// src/routes/auth.route.ts
+// Rotas de autenticação humana (login JWT). Prefixo /v1/auth.
+// NÃO há cadastro público — usuários são criados SOMENTE pelo admin
+// (ver src/routes/admin.route.ts). Aqui só: login, perfil e troca de senha.
+import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
+import { authJwt } from '../middlewares/auth.middleware'
+import { prisma } from '../utils/prisma'
+import { hashPassword, verifyPassword, verifyPasswordDummy } from '../utils/password'
+import {
+  getOrSetDeviceId,
+  verificarBloqueio,
+  registrarTentativaFalha,
+  limparAposSucesso,
+} from '../services/login-rate-limit.service'
+import { marcarAtiva, encerrarSessao } from '../services/session-activity.service'
+import { getExternalAuthProvider } from '../services/external-auth'
+import { validarCredenciais } from '../services/credential-validation.service'
+import { randomUUID } from 'node:crypto'
+
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+})
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(8),
+})
+
+export async function authRoutes(app: FastifyInstance) {
+  // ── POST /auth/login — Autentica e devolve o JWT ──────────────
+  app.post('/auth/login', async (request, reply) => {
+    const body = loginSchema.safeParse(request.body)
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Payload inválido', details: body.error.flatten() })
+    }
+
+    // Cookie de dispositivo (Camada C) — clientes que não retêm cookie (integrações
+    // servidor-a-servidor) simplesmente não acumulam essa camada; degrada pras
+    // Camadas A+B, que continuam valendo.
+    const dispositivoId = getOrSetDeviceId(request, reply)
+
+    const bloqueio = await verificarBloqueio(request.ip, body.data.email, dispositivoId)
+    if (bloqueio.bloqueado) {
+      return reply.status(429).send({
+        error: 'Muitas tentativas de login. Tente novamente mais tarde.',
+        retryAfterSeconds: bloqueio.segundosRestantes,
+      })
+    }
+
+    const { ok, user } = await validarCredenciais(body.data.email, body.data.password)
+    if (!ok || !user) {
+      await registrarTentativaFalha(request.ip, body.data.email, dispositivoId)
+      return reply.status(401).send({ error: 'Credenciais inválidas' })
+    }
+
+    await limparAposSucesso(request.ip, body.data.email)
+
+    // jti identifica esta sessão no Redis (session-activity.service.ts) — é
+    // o que permite revogar/expirar por inatividade antes do JWT em si vencer.
+    const jti = randomUUID()
+    const token = app.jwt.sign({
+      userId: user.id,
+      apiClientId: user.apiClientId,
+      accountRole: user.apiClient.role,
+      jti,
+    })
+    await marcarAtiva(jti)
+
+    return reply.send({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      account: { id: user.apiClient.id, name: user.apiClient.name },
+    })
+  })
+
+  // ── POST /auth/logout — Revoga o token atual ──────────────────
+  // JWT é stateless — sem isso, "logout" não faria nada além do cliente
+  // descartar o token, que continuaria válido até expirar sozinho.
+  app.post('/auth/logout', { preHandler: authJwt }, async (request, reply) => {
+    // authJwt (preHandler) já verificou o token e populou request.user.
+    await encerrarSessao(request.user.jti)
+    return reply.send({ ok: true })
+  })
+
+  // ── GET /auth/me — Perfil do usuário autenticado ──────────────
+  app.get('/auth/me', { preHandler: authJwt }, async (request, reply) => {
+    return reply.send({
+      user: request.authUser,
+      account: {
+        id: request.apiClient!.id,
+        name: request.apiClient!.name,
+        role: request.apiClient!.role,
+      },
+    })
+  })
+
+  // ── POST /auth/change-password — Troca a própria senha ────────
+  app.post('/auth/change-password', { preHandler: authJwt }, async (request, reply) => {
+    const body = changePasswordSchema.safeParse(request.body)
+    if (!body.success) {
+      return reply.status(400).send({ error: 'Payload inválido', details: body.error.flatten() })
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: request.authUser!.id } })
+    if (!user) {
+      return reply.status(401).send({ error: 'Usuário não encontrado' })
+    }
+
+    // Account linked to an external identity provider: the password lives
+    // there (see src/services/external-auth.ts); the local hash is never used.
+    if (user.externalId !== null) {
+      const external = getExternalAuthProvider()
+      if (!external || !external.changePassword) {
+        return reply.status(501).send({ error: 'Troca de senha indisponível para esta conta' })
+      }
+      const okAtual = await external.verifyPassword(user.externalId, body.data.currentPassword)
+      if (!okAtual) {
+        return reply.status(401).send({ error: 'Senha atual incorreta' })
+      }
+      const gravou = await external.changePassword(user.externalId, body.data.newPassword)
+      if (!gravou) {
+        return reply.status(500).send({ error: 'Erro ao atualizar senha' })
+      }
+      return reply.send({ ok: true })
+    }
+
+    const ok = await verifyPassword(body.data.currentPassword, user.passwordHash)
+    if (!ok) {
+      return reply.status(401).send({ error: 'Senha atual incorreta' })
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: await hashPassword(body.data.newPassword) },
+    })
+
+    return reply.send({ ok: true })
+  })
+}

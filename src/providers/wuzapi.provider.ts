@@ -1,0 +1,518 @@
+// src/providers/wuzapi.provider.ts
+//
+// Provider WuzAPI (https://github.com/asternic/wuzapi) — wrapper Go sobre a lib
+// whatsmeow (fala direto com o WebSocket do WhatsApp). Suporta botões interativos
+// nativos (explorado na Parte 2).
+//
+// DIFERENÇA DE MODELO vs Evolution: o WuzAPI autentica por TOKEN-POR-USUÁRIO,
+// não por apikey global + instanceId na URL. Cada sessão é um "user" do WuzAPI com
+// seu próprio token. Como o token é opaco e definido por nós na criação, guardamos
+// esse token no campo Instance.instanceId — assim toda chamada seguinte recebe o
+// token via o parâmetro `instanceId` da interface e o usa no header Authorization.
+// Só a criação/remoção de usuário usa o adminToken.
+
+import axios, { AxiosInstance } from 'axios'
+import { randomBytes } from 'crypto'
+import { config } from '../config'
+import { logger } from '../utils/logger'
+import { assertPublicHttpUrl, pinnedAgents } from '../utils/ssrf-guard'
+import { resolverDestino } from '../utils/jid-brasil'
+import type { IWhatsappProvider, ProviderSendResult, InstanceStatus, MessageType, Provider, WhatsappButton, WhatsappListSection, ChatPresenceState, CheckNumberResult } from '../types'
+
+interface WuzUser {
+  id: string | number
+  name: string
+  token: string
+}
+
+/**
+ * Eventos que a sessão assina no WuzAPI. Fonte única: vai tanto no
+ * /session/connect quanto no /webhook — os dois sobrescrevem a lista, e
+ * divergir entre eles zera o que o outro tinha configurado.
+ *
+ * - Message: mensagem recebida, inclusive clique de botão e escolha de lista.
+ * - ReadReceipt: recibos de entrega e leitura (alimentam deliveredAt/readAt).
+ */
+export const WUZAPI_EVENTOS = ['Message', 'ReadReceipt'] as const
+
+export class WuzapiProvider implements IWhatsappProvider {
+  readonly name: Provider = 'WUZAPI'
+  private admin: AxiosInstance
+  private baseUrl: string
+
+  constructor() {
+    this.baseUrl = config.providers.wuzapi.url
+    // Cliente admin — só pra provisionar/apagar usuários (sessões).
+    this.admin = axios.create({
+      baseURL: this.baseUrl,
+      headers: {
+        Authorization: config.providers.wuzapi.adminToken,
+        'Content-Type': 'application/json',
+      },
+      timeout: 15000,
+    })
+  }
+
+  /**
+   * Cliente autenticado como o USUÁRIO (token guardado em Instance.instanceId).
+   * Auth de usuário no WuzAPI é pelo header `token` — o `Authorization` é só do
+   * admin (retorna 401 se usado aqui).
+   */
+  private userClient(token: string): AxiosInstance {
+    return axios.create({
+      baseURL: this.baseUrl,
+      headers: {
+        token,
+        'Content-Type': 'application/json',
+      },
+      timeout: 20000,
+    })
+  }
+
+  // ── Destinatário ─────────────────────────────────────────────
+
+  /**
+   * Converte o número recebido no formato que o WhatsApp realmente endereça
+   * (ver utils/jid-brasil.ts — problema do nono dígito brasileiro). Aceita
+   * tanto "5544977770013" quanto "554477770013": os dois resolvem pro mesmo
+   * destino. Diferente da Evolution, o WuzAPI não normaliza nada sozinho —
+   * repassa cru pro whatsmeow, que aceita um número inexistente sem reclamar
+   * e faz a mensagem sumir em silêncio.
+   *
+   * Devolve `erro` preenchido quando o número não tem WhatsApp: melhor falhar
+   * explícito do que registrar "enviado" numa mensagem que não chega.
+   */
+  private async prepararDestino(
+    instanceId: string,
+    to: string,
+    start: number,
+  ): Promise<{ telefone: string; erro?: ProviderSendResult }> {
+    const { telefone, existeNoWhatsapp } = await resolverDestino(to, (telefones) =>
+      this.checkNumber(instanceId, telefones),
+    )
+    if (!existeNoWhatsapp) {
+      return {
+        telefone,
+        erro: {
+          success: false,
+          error: `Número ${telefone} não tem WhatsApp ativo.`,
+          errorCode: 'NUMBER_NOT_ON_WHATSAPP',
+          duration: Date.now() - start,
+        },
+      }
+    }
+    return { telefone }
+  }
+
+  // ── Envio ────────────────────────────────────────────────────
+
+  async sendText(instanceId: string, to: string, text: string): Promise<ProviderSendResult> {
+    const start = Date.now()
+    const { telefone, erro } = await this.prepararDestino(instanceId, to, start)
+    if (erro) return erro
+    try {
+      const response = await this.userClient(instanceId).post('/chat/send/text', {
+        Phone: telefone,
+        Body: text,
+      })
+      return {
+        success: true,
+        providerId: response.data?.data?.Id,
+        duration: Date.now() - start,
+      }
+    } catch (err: any) {
+      return this.handleError(err, Date.now() - start)
+    }
+  }
+
+  async sendMedia(
+    instanceId: string,
+    to: string,
+    mediaUrl: string,
+    caption?: string,
+    type: MessageType = 'IMAGE'
+  ): Promise<ProviderSendResult> {
+    const start = Date.now()
+    const { telefone, erro } = await this.prepararDestino(instanceId, to, start)
+    if (erro) return erro
+
+    // WuzAPI recebe a mídia em base64 (data URI), não por URL — baixamos e convertemos.
+    // mediaUrl vem de fora (payload do tenant): valida contra SSRF (bloqueia IP privado/
+    // reservado/metadata da nuvem) e fixa a conexão no IP já validado (evita DNS rebinding
+    // entre a checagem e o fetch).
+    let dataUri: string
+    try {
+      const pinned = await assertPublicHttpUrl(mediaUrl)
+      const media = await axios.get<ArrayBuffer>(mediaUrl, {
+        responseType: 'arraybuffer',
+        timeout: 20000,
+        ...pinnedAgents(pinned),
+      })
+      const mime = media.headers['content-type'] ?? this.defaultMime(type)
+      dataUri = `data:${mime};base64,${Buffer.from(media.data).toString('base64')}`
+    } catch (err: any) {
+      return { success: false, error: `Falha ao baixar mídia: ${err?.message}`, errorCode: 'MEDIA_FETCH', duration: Date.now() - start }
+    }
+
+    // Endpoint e nome do campo mudam por tipo no WuzAPI.
+    const map: Record<string, { endpoint: string; field: string }> = {
+      IMAGE:    { endpoint: '/chat/send/image',    field: 'Image' },
+      VIDEO:    { endpoint: '/chat/send/video',    field: 'Video' },
+      AUDIO:    { endpoint: '/chat/send/audio',    field: 'Audio' },
+      DOCUMENT: { endpoint: '/chat/send/document', field: 'Document' },
+      STICKER:  { endpoint: '/chat/send/sticker',  field: 'Sticker' },
+    }
+    const cfg = map[type] ?? map.IMAGE
+
+    try {
+      const body: Record<string, unknown> = { Phone: telefone, [cfg.field]: dataUri }
+      if (caption) body.Caption = caption
+      // WuzAPI exige FileName pra type=DOCUMENT — sem isso ele nem aceita o
+      // payload (não dá pra derivar de um data URI, precisa vir explícito).
+      if (type === 'DOCUMENT') {
+        body.FileName = mediaUrl.split('/').pop()?.split('?')[0] || 'documento.pdf'
+      }
+      const response = await this.userClient(instanceId).post(cfg.endpoint, body)
+      return {
+        success: true,
+        providerId: response.data?.data?.Id,
+        duration: Date.now() - start,
+      }
+    } catch (err: any) {
+      return this.handleError(err, Date.now() - start)
+    }
+  }
+
+  /**
+   * Mensagem interativa com botões (quick-reply, link, call). Diferencial do
+   * WuzAPI sobre os providers Baileys. Endpoint /chat/send/buttons.
+   * Limite do WhatsApp: até 3 quick-reply + 1 link + 1 call.
+   *
+   * Mapeamento do nosso formato → WuzAPI (confirmado no source do handler):
+   *   quickreply → { type: "reply",    title }
+   *   url        → { type: "cta_url",  title, url }
+   *   call       → { type: "cta_call", title, phone_number }
+   */
+  async sendButtons(
+    instanceId: string,
+    to: string,
+    body: string,
+    buttons: WhatsappButton[],
+    footer?: string
+  ): Promise<ProviderSendResult> {
+    const start = Date.now()
+    const { telefone, erro } = await this.prepararDestino(instanceId, to, start)
+    if (erro) return erro
+
+    const wuzButtons = buttons.map(b => {
+      if (b.type === 'url')  return { type: 'cta_url',  title: b.displayText, url: b.url }
+      if (b.type === 'call') return { type: 'cta_call', title: b.displayText, phone_number: b.phoneNumber }
+      return { type: 'reply', title: b.displayText }
+    })
+
+    try {
+      const payload: Record<string, unknown> = { Phone: telefone, Body: body, Buttons: wuzButtons }
+      if (footer) payload.Footer = footer
+      const response = await this.userClient(instanceId).post('/chat/send/buttons', payload)
+      return {
+        success: true,
+        providerId: response.data?.data?.Id,
+        duration: Date.now() - start,
+      }
+    } catch (err: any) {
+      return this.handleError(err, Date.now() - start)
+    }
+  }
+
+  /**
+   * Pin de localização no mapa. Endpoint /chat/send/location.
+   * Campos confirmados no source do handler (locationStruct): Phone, Latitude,
+   * Longitude, Name (rótulo opcional exibido abaixo do pin).
+   */
+  async sendLocation(instanceId: string, to: string, latitude: number, longitude: number, name?: string): Promise<ProviderSendResult> {
+    const start = Date.now()
+    const { telefone, erro } = await this.prepararDestino(instanceId, to, start)
+    if (erro) return erro
+    try {
+      const body: Record<string, unknown> = { Phone: telefone, Latitude: latitude, Longitude: longitude }
+      if (name) body.Name = name
+      const response = await this.userClient(instanceId).post('/chat/send/location', body)
+      return { success: true, providerId: response.data?.data?.Id, duration: Date.now() - start }
+    } catch (err: any) {
+      return this.handleError(err, Date.now() - start)
+    }
+  }
+
+  /**
+   * Cartão de contato (vCard). Endpoint /chat/send/contact.
+   * Campos confirmados no source (contactStruct): Phone, Name, Vcard (string
+   * VCARD 3.0 completa — o WuzAPI não monta o vCard sozinho, recebe pronto).
+   */
+  async sendContact(instanceId: string, to: string, name: string, phone: string): Promise<ProviderSendResult> {
+    const start = Date.now()
+    const { telefone, erro } = await this.prepararDestino(instanceId, to, start)
+    if (erro) return erro
+    const digits = phone.replace(/\D/g, '')
+    const vcard = `BEGIN:VCARD\nVERSION:3.0\nFN:${name}\nTEL;type=CELL;type=VOICE;waid=${digits}:+${digits}\nEND:VCARD`
+    try {
+      const response = await this.userClient(instanceId).post('/chat/send/contact', { Phone: telefone, Name: name, Vcard: vcard })
+      return { success: true, providerId: response.data?.data?.Id, duration: Date.now() - start }
+    } catch (err: any) {
+      return this.handleError(err, Date.now() - start)
+    }
+  }
+
+  /**
+   * Enquete com opções de resposta. Endpoint /chat/send/poll.
+   * Campos confirmados no source (pollRequest, tags JSON minúsculas): group
+   * (destinatário — mesmo formato de Phone dos outros envios, nome genérico
+   * porque também aceita JID de grupo), header (pergunta), options (2-12 itens).
+   */
+  async sendPoll(instanceId: string, to: string, question: string, options: string[]): Promise<ProviderSendResult> {
+    const start = Date.now()
+    // `group` aceita número OU JID de grupo; resolverDestino repassa JIDs
+    // intactos, então grupos continuam funcionando sem tratamento especial.
+    const { telefone, erro } = await this.prepararDestino(instanceId, to, start)
+    if (erro) return erro
+    try {
+      const response = await this.userClient(instanceId).post('/chat/send/poll', { group: telefone, header: question, options })
+      return { success: true, providerId: response.data?.data?.Id, duration: Date.now() - start }
+    } catch (err: any) {
+      return this.handleError(err, Date.now() - start)
+    }
+  }
+
+  /**
+   * Lista interativa (menu). Endpoint /chat/send/list.
+   *
+   * Campos confirmados enviando de verdade contra o WuzAPI em produção
+   * (2026-08-10) e conferidos nas tags JSON do binário: Phone, ButtonText
+   * (rótulo do botão que abre o menu), Desc (corpo), TopText (título acima),
+   * FooterText, Sections[{Title, Rows[{Title, Desc, RowID}]}].
+   *
+   * Serve pros casos que BUTTONS não cobre: o WhatsApp limita quickreply a 3
+   * botões, e a lista aceita várias linhas. O RowID escolhido é o que volta
+   * no webhook — é ali que a aplicação põe o identificador que precisa.
+   */
+  async sendList(
+    instanceId: string,
+    to: string,
+    body: string,
+    buttonText: string,
+    sections: WhatsappListSection[],
+    title?: string,
+    footer?: string,
+  ): Promise<ProviderSendResult> {
+    const start = Date.now()
+    const { telefone, erro } = await this.prepararDestino(instanceId, to, start)
+    if (erro) return erro
+    try {
+      const payload: Record<string, unknown> = {
+        Phone: telefone,
+        ButtonText: buttonText,
+        Desc: body,
+        Sections: sections.map(s => ({
+          Title: s.title,
+          Rows: s.rows.map(r => ({ Title: r.title, Desc: r.description ?? '', RowID: r.rowId })),
+        })),
+      }
+      if (title) payload.TopText = title
+      if (footer) payload.FooterText = footer
+      const response = await this.userClient(instanceId).post('/chat/send/list', payload)
+      return { success: true, providerId: response.data?.data?.Id, duration: Date.now() - start }
+    } catch (err: any) {
+      return this.handleError(err, Date.now() - start)
+    }
+  }
+
+  /**
+   * Reage com emoji a uma mensagem já trocada na conversa. Endpoint /chat/react.
+   * Campos confirmados no source (textStruct do handler React): Phone, Body
+   * (emoji; string vazia = remove a reação), Id (id da mensagem-alvo).
+   */
+  async sendReaction(instanceId: string, to: string, targetMessageId: string, emoji: string): Promise<ProviderSendResult> {
+    const start = Date.now()
+    const { telefone, erro } = await this.prepararDestino(instanceId, to, start)
+    if (erro) return erro
+    try {
+      const response = await this.userClient(instanceId).post('/chat/react', { Phone: telefone, Body: emoji, Id: targetMessageId })
+      return { success: true, providerId: response.data?.data?.Id, duration: Date.now() - start }
+    } catch (err: any) {
+      return this.handleError(err, Date.now() - start)
+    }
+  }
+
+  /**
+   * Indicador de "digitando…"/"gravando áudio…" na conversa. Endpoint /chat/presence.
+   * Campos confirmados no source (chatPresenceStruct): Phone, State ("composing"/
+   * "paused"), Media (opcional — "audio" indica "gravando áudio" em vez de "digitando").
+   */
+  async setPresence(instanceId: string, to: string, state: ChatPresenceState): Promise<void> {
+    // Sem checagem de existência aqui: presença é acessória (não é conteúdo) e
+    // devolve void — falhar seria pior que enviar pra um destino inválido.
+    const { telefone } = await resolverDestino(to, (t) => this.checkNumber(instanceId, t))
+    const body: Record<string, unknown> = { Phone: telefone, State: state === 'paused' ? 'paused' : 'composing' }
+    if (state === 'recording') body.Media = 'audio'
+    await this.userClient(instanceId).post('/chat/presence', body)
+  }
+
+  /**
+   * Marca mensagens recebidas como lidas (double-check azul). Endpoint /chat/markread.
+   * Campos confirmados no source (markReadStruct, campos novos priorizados sobre
+   * os legados Chat/Sender): Id (array de ids), ChatPhone, SenderPhone (opcional,
+   * só relevante em grupos — quem enviou a mensagem).
+   */
+  async markRead(instanceId: string, chatPhone: string, messageIds: string[]): Promise<void> {
+    const { telefone } = await resolverDestino(chatPhone, (t) => this.checkNumber(instanceId, t))
+    await this.userClient(instanceId).post('/chat/markread', { Id: messageIds, ChatPhone: telefone })
+  }
+
+  /**
+   * Verifica se números têm WhatsApp ativo. Endpoint /user/check.
+   * Campos confirmados no source (checkUserStruct/UserCollection): request
+   * {Phone: string[]}, resposta {Users: [{Query, IsInWhatsapp, JID, VerifiedName}]}.
+   */
+  async checkNumber(instanceId: string, phones: string[]): Promise<CheckNumberResult[]> {
+    const response = await this.userClient(instanceId).post('/user/check', { Phone: phones })
+    const users: Array<{ Query: string; IsInWhatsapp: boolean; JID: string }> = response.data?.data?.Users ?? response.data?.Users ?? []
+    return users.map(u => ({ phone: u.Query, existsOnWhatsapp: u.IsInWhatsapp, jid: u.JID || undefined }))
+  }
+
+  // ── Sessão / provisionamento ─────────────────────────────────
+
+  async createInstance(name: string): Promise<{ instanceId: string; qrCode?: string }> {
+    // `name` pode ser um nome novo ("inst-xxx") OU, na recuperação (404), o próprio
+    // token já existente. Procura por qualquer um dos dois pra reaproveitar a sessão.
+    const existing = await this.findUser(name)
+    const token = existing?.token ?? this.generateToken()
+
+    if (!existing) {
+      await this.admin.post('/admin/users', {
+        name,
+        token,
+        events: 'Message',
+      })
+    }
+
+    await this.connect(token)
+    const { qrCode } = await this.getQr(token)
+    return { instanceId: token, qrCode }
+  }
+
+  async connect(instanceId: string): Promise<{ qrCode?: string }> {
+    try {
+      await this.userClient(instanceId).post('/session/connect', {
+        // Mesma lista do setWebhook (WUZAPI_EVENTOS): sem ReadReceipt aqui, uma
+        // reconexão derrubava os recibos de entrega/leitura que o webhook tinha
+        // acabado de assinar.
+        Subscribe: [...WUZAPI_EVENTOS],
+        Immediate: false,
+      })
+    } catch (err: any) {
+      // "already connected" não é erro — segue pra buscar o QR/estado atual.
+      if (err?.response?.status !== 500) throw err
+    }
+    return this.getQr(instanceId)
+  }
+
+  async getQr(instanceId: string): Promise<{ qrCode?: string }> {
+    try {
+      // O WuzAPI expõe o QR dentro do /session/status (campo `qrcode`, já em
+      // data URI PNG) — não há endpoint /session/qr separado.
+      const response = await this.userClient(instanceId).get('/session/status')
+      const qr = response.data?.data?.qrcode
+      return { qrCode: qr || undefined }
+    } catch {
+      return { qrCode: undefined }
+    }
+  }
+
+  async getInstanceStatus(instanceId: string): Promise<InstanceStatus> {
+    try {
+      const response = await this.userClient(instanceId).get('/session/status')
+      const data = response.data?.data ?? {}
+      if (data.loggedIn && data.connected) return 'connected'
+      if (data.connected && !data.loggedIn) return 'qr_required'
+      return 'disconnected'
+    } catch {
+      return 'unknown'
+    }
+  }
+
+  /**
+   * Registra a URL de webhook da sessão.
+   *
+   * `events` PRECISA ir junto: o handler do WuzAPI sobrescreve o registro do
+   * usuário com o que vier no corpo, então mandar só a URL ZERAVA a lista de
+   * eventos inscritos da sessão em execução. O efeito era silencioso e total —
+   * o WuzAPI recebia tudo do WhatsApp e descartava na porta ("Skipping
+   * webhook. Not subscribed for this type", subscribedEvents=[]): nenhum
+   * recibo de entrega/leitura, nenhum clique de botão ou lista chegava, em
+   * nenhum número. Ficava ainda mais difícil de ver porque o BANCO seguia
+   * mostrando events='Message' (e o GET /webhook também) — só o estado em
+   * memória, que é quem decide o despacho, ficava vazio. Diagnosticado
+   * 2026-08-10 caçando por que um clique em lista nunca chegava.
+   */
+  async setWebhook(instanceId: string, url: string): Promise<void> {
+    await this.userClient(instanceId).post('/webhook', {
+      webhookurl: url,
+      events: WUZAPI_EVENTOS,
+    })
+    logger.debug(`[WuzAPI] webhook definido (${url}) eventos=${WUZAPI_EVENTOS.join(',')}`)
+  }
+
+  async deleteInstance(instanceId: string): Promise<void> {
+    // `instanceId` aqui é o token do usuário — resolve o id pelo admin e apaga.
+    const user = await this.findUser(instanceId)
+    if (!user) {
+      logger.debug(`[WuzAPI] deleteInstance: usuário não encontrado (já removido?)`)
+      return
+    }
+    // Logout best-effort antes de apagar (encerra a sessão no whatsmeow).
+    try {
+      await this.userClient(instanceId).post('/session/logout', {})
+    } catch { /* best-effort */ }
+    await this.admin.delete(`/admin/users/${user.id}`)
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────
+
+  /** Lista usuários no admin e casa por nome OU por token (recuperação). */
+  private async findUser(nameOrToken: string): Promise<WuzUser | null> {
+    try {
+      const response = await this.admin.get('/admin/users')
+      const users: WuzUser[] = response.data?.data ?? response.data ?? []
+      return users.find(u => u.name === nameOrToken || u.token === nameOrToken) ?? null
+    } catch {
+      return null
+    }
+  }
+
+  private generateToken(): string {
+    return randomBytes(16).toString('hex')
+  }
+
+  private defaultMime(type: MessageType): string {
+    const map: Record<string, string> = {
+      IMAGE: 'image/jpeg',
+      VIDEO: 'video/mp4',
+      AUDIO: 'audio/ogg',
+      DOCUMENT: 'application/pdf',
+      STICKER: 'image/webp',
+    }
+    return map[type] ?? 'application/octet-stream'
+  }
+
+  isBanError(errorMsg: string): boolean {
+    // '463' = restrição de conta que a própria WhatsApp devolve ao enviar
+    // (diferente de '403', que é erro de autenticação/permissão da WuzAPI).
+    const banSignals = ['banned', 'blocked', 'unauthorized', '403', '463', 'logged out', 'not logged in']
+    return banSignals.some(s => errorMsg.toLowerCase().includes(s.toLowerCase()))
+  }
+
+  private handleError(err: any, duration: number): ProviderSendResult {
+    const errorMsg = err?.response?.data?.error ?? err?.response?.data?.message ?? err?.message ?? 'Unknown error'
+    const errorCode = String(err?.response?.status ?? 'ERR')
+    return { success: false, error: errorMsg, errorCode, duration }
+  }
+}

@@ -1,0 +1,95 @@
+# Example stack: app + PostgreSQL + Redis (Evolution API and WuzAPI optional).
+#
+#   cp .env.example .env            # then fill in the secrets
+#   docker compose -f docker-compose.example.yml up -d --build
+#   docker compose -f docker-compose.example.yml --profile evolution up -d   # optional provider
+#
+# The `migrate` service applies the database migrations once, then the app starts.
+# Secrets come from .env (POSTGRES_PASSWORD, EVOLUTION_API_KEY, WUZAPI_ADMIN_TOKEN):
+# compose refuses to start the database without POSTGRES_PASSWORD.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: apienvios
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: apienvios
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U apienvios']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: builder
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://apienvios:${POSTGRES_PASSWORD}@postgres:5432/apienvios
+      DIRECT_DATABASE_URL: postgresql://apienvios:${POSTGRES_PASSWORD}@postgres:5432/apienvios
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://apienvios:${POSTGRES_PASSWORD}@postgres:5432/apienvios
+      DIRECT_DATABASE_URL: postgresql://apienvios:${POSTGRES_PASSWORD}@postgres:5432/apienvios
+      REDIS_HOST: redis
+    ports:
+      - '3000:3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # --- Optional WhatsApp providers (enable with --profile evolution / wuzapi) ---
+  evolution:
+    profiles: ['evolution']
+    image: evoapicloud/evolution-api:latest
+    restart: unless-stopped
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?set EVOLUTION_API_KEY in .env}
+    ports:
+      - '8080:8080'
+
+  wuzapi:
+    profiles: ['wuzapi']
+    image: asternic/wuzapi:latest
+    restart: unless-stopped
+    environment:
+      WUZAPI_ADMIN_TOKEN: ${WUZAPI_ADMIN_TOKEN:?set WUZAPI_ADMIN_TOKEN in .env}
+    ports:
+      - '8888:8080'
+
+volumes:
+  pgdata:
+  redisdata:

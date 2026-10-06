@@ -1,0 +1,550 @@
+<div class="page-head">
+  <div>
+    <a href="/admin" class="muted">&larr; Voltar</a>
+    <h1><%= it.instance.name || 'Instância' %></h1>
+    <p class="muted">
+      Provider: <strong><%= it.instance.provider %></strong>
+      · Slug: <code><%= it.instance.slug || '—' %></code>
+      · ID: <code><%= it.instance.id %></code>
+    </p>
+  </div>
+</div>
+
+<% if (it.ok) { %>
+  <div class="alert alert-ok"><%= it.ok %></div>
+<% } %>
+
+<div class="card">
+  <h2>Renomear instância</h2>
+  <p class="muted">O nome é um apelido único na sua conta. O slug é único globalmente e usado na URL/API (ex.: <code>/v1/instance/<%= it.instance.slug || 'meu-slug' %>/messages/chat</code>).</p>
+  <form method="POST" action="/admin/instances/<%= it.instance.id %>/rename" class="form">
+    <label class="field">
+      <span>Nome (apelido)</span>
+      <input type="text" name="name" value="<%= it.instance.name || '' %>" placeholder="Vendas-SP" />
+    </label>
+    <label class="field">
+      <span>Slug (kebab-case, 3–40)</span>
+      <input type="text" name="slug" value="<%= it.instance.slug || '' %>" placeholder="vendas-sp" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" />
+    </label>
+    <button type="submit" class="btn btn-primary">Salvar</button>
+  </form>
+</div>
+
+<% if (it.canAssignOwner) { %>
+<div class="card">
+  <h2>Dono da instância</h2>
+  <p class="muted">Atribua esta instância a um membro da conta — ele passa a vê-la e gerenciá-la. Sem dono, a instância fica visível apenas para os administradores da conta.</p>
+  <form method="POST" action="/admin/instances/<%= it.instance.id %>/owner" class="form">
+    <label class="field">
+      <span>Dono</span>
+      <select name="ownerUserId">
+        <option value="">— Sem dono (nível da conta) —</option>
+        <% it.members.forEach(function(m){ %>
+          <option value="<%= m.id %>" <%= it.instance.ownerUserId === m.id ? 'selected' : '' %>>
+            <%= (m.name || m.email) %> (<%= m.role === 'OWNER' ? 'Admin' : 'Usuário' %>)
+          </option>
+        <% }) %>
+      </select>
+    </label>
+    <button type="submit" class="btn btn-primary">Salvar dono</button>
+  </form>
+</div>
+<% } %>
+
+<div class="card">
+  <div class="page-head">
+    <h2>Números do pool</h2>
+    <span class="muted">Enviadas hoje (total do pool): <strong><%= it.sentTodayTotal %></strong></span>
+  </div>
+  <p class="muted">Cada número é uma sessão/conexão real do WhatsApp dentro deste pool. <strong>É por estes números que as mensagens são enviadas</strong> — o roteador escolhe automaticamente o melhor número conectado (rodízio anti-ban). Conecte cada número escaneando o QR (Evolution/WuzAPI) ou direto (Cloud API).</p>
+
+  <% const algumConectado = it.numbers.some(function(n){ return n.connectionState === 'CONNECTED' }); %>
+  <% if (it.numbers.length > 0 && !algumConectado) { %>
+    <div class="alert alert-error">⚠️ Nenhum número do pool está <strong>CONNECTED</strong>. O envio de mensagens vai falhar até você conectar ao menos um número abaixo (escaneie o QR).</div>
+  <% } else if (algumConectado) { %>
+    <div class="alert alert-ok">✓ Pool pronto para envio: <strong><%= it.numbers.filter(function(n){ return n.connectionState === 'CONNECTED' }).length %></strong> número(s) conectado(s).</div>
+  <% } %>
+
+  <div class="legend">
+    <span class="legend-title">Legenda de conexão:</span>
+    <span class="badge badge-CONNECTED">CONNECTED</span> <span class="muted">conectado, pronto para enviar</span>
+    <span class="badge badge-QR_PENDING">QR_PENDING</span> <span class="muted">aguardando leitura do QR</span>
+    <span class="badge badge-DISCONNECTED">DISCONNECTED</span> <span class="muted">desconectado</span>
+    <span class="badge badge-BANNED">BANNED</span> <span class="muted">banido pelo WhatsApp</span>
+  </div>
+
+  <table class="instances-table">
+    <thead>
+      <tr>
+        <th>Provider</th>
+        <th>Telefone / Label</th>
+        <th>Status</th>
+        <th>Conexão</th>
+        <th>Enviadas hoje</th>
+        <th>Ações</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% if (it.numbers.length === 0) { %>
+        <tr><td colspan="6" class="muted center">Nenhum número no pool ainda. Adicione abaixo.</td></tr>
+      <% } %>
+      <% it.numbers.forEach(function(num){ %>
+        <tr x-data="numberPanel('<%= it.instance.id %>', '<%= num.id %>', '<%= num.connectionState %>')"
+            x-init="startPolling()">
+          <td><strong><%= num.provider %></strong></td>
+          <td><%= num.phone || num.label || '—' %></td>
+          <td><span class="badge badge-status"><%= num.status %></span></td>
+          <td><span class="badge" :class="'badge-' + state" x-text="state"></span></td>
+          <td><%= num.sentToday %></td>
+          <td class="number-actions">
+            <button type="button" class="btn btn-ghost" @click="connect()" :disabled="loading">
+              <span x-show="!loading">Conectar</span>
+              <span x-show="loading" x-cloak>Conectando...</span>
+            </button>
+            <button type="button" class="btn btn-ghost" @click="refreshStatus()">Status</button>
+            <form method="POST" action="/admin/instances/<%= it.instance.id %>/numbers/<%= num.id %>/delete"
+                  onsubmit="return confirm('Remover este número do pool?')" style="display:inline">
+              <button type="submit" class="btn btn-ghost btn-danger">Remover</button>
+            </form>
+            <div class="qr-area" x-show="qr" x-cloak>
+              <p class="muted">Escaneie o QR no WhatsApp:</p>
+              <img :src="qr" alt="QR Code" class="qr-img" />
+            </div>
+            <div class="alert alert-error" x-show="error" x-cloak x-text="error" style="margin-top:8px"></div>
+          </td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
+
+  <h3>Adicionar número</h3>
+  <form method="POST" action="/admin/instances/<%= it.instance.id %>/numbers" class="form">
+    <label class="field">
+      <span>Provider</span>
+      <select name="provider">
+        <option value="EVOLUTION">Evolution</option>
+        <option value="WUZAPI">WuzAPI (botões interativos)</option>
+        <option value="CLOUD_API">Cloud API</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>Label (opcional)</span>
+      <input type="text" name="label" placeholder="Ex.: Número principal" />
+    </label>
+    <button type="submit" class="btn btn-primary">Adicionar</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Enviar mensagem de teste</h2>
+  <p class="muted">A mensagem é enfileirada e roteada automaticamente pelo melhor número conectado do pool (rodízio anti-ban). Use o número <strong>com DDI</strong>, sem símbolos (ex.: <code>5544999990000</code>).</p>
+  <% if (it.sent) { %>
+    <div class="alert alert-ok">✓ Mensagem enfileirada. Acompanhe o status em "Últimas mensagens" abaixo.</div>
+  <% } %>
+  <% if (it.sendError) { %>
+    <div class="alert alert-error"><%= it.sendError %></div>
+  <% } %>
+  <form method="POST" action="/admin/instances/<%= it.instance.id %>/test" class="form form-inline-send">
+    <label class="field">
+      <span>Destino (com DDI)</span>
+      <input type="text" name="to" placeholder="5544999990000" pattern="\d{10,20}" title="Somente dígitos, com DDI+DDD+número (10 a 20 dígitos)." inputmode="numeric" required />
+    </label>
+    <label class="field">
+      <span>Mensagem</span>
+      <textarea name="body" rows="2" required placeholder="Digite a mensagem de teste..."></textarea>
+    </label>
+    <button type="submit" class="btn btn-primary">Enviar</button>
+  </form>
+</div>
+
+<% const msgTotalPages = Math.max(1, Math.ceil(it.messagesTotal / it.messagesPageSize)); %>
+<div class="card">
+  <div class="page-head" style="margin-bottom:8px">
+    <h2 style="margin:0">Últimas mensagens</h2>
+    <span class="muted"><%= it.messagesTotal %> mensagem<%= it.messagesTotal === 1 ? '' : 'ns' %> no total</span>
+  </div>
+  <table class="instances-table">
+    <thead>
+      <tr><th>Destino</th><th>Tipo</th><th>Status</th><th>Criada em</th><th>Ações</th></tr>
+    </thead>
+    <tbody>
+      <% if (it.messages.length === 0) { %>
+        <tr><td colspan="5" class="muted center">Nenhuma mensagem ainda.</td></tr>
+      <% } %>
+      <% it.messages.forEach(function(m){ %>
+        <tr>
+          <td><%= m.toPhone %></td>
+          <td><%= m.type %></td>
+          <td><span class="badge badge-msg"><%= m.status %></span></td>
+          <td><%= it.fmtData(m.createdAt) %></td>
+          <td class="number-actions">
+            <% if (m.status === 'FAILED') { %>
+              <form method="POST" action="/admin/instances/<%= it.instance.id %>/messages/<%= m.id %>/resend" style="display:inline">
+                <button type="submit" class="btn btn-ghost">Reenviar</button>
+              </form>
+            <% } %>
+            <form method="POST" action="/admin/instances/<%= it.instance.id %>/messages/<%= m.id %>/delete"
+                  onsubmit="return confirm('Remover esta mensagem do histórico?')" style="display:inline">
+              <button type="submit" class="btn btn-ghost btn-danger">Excluir</button>
+            </form>
+          </td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
+  <% if (msgTotalPages > 1) { %>
+  <div class="page-head" style="margin-top:12px">
+    <span class="muted">Página <%= it.messagesPage %> de <%= msgTotalPages %></span>
+    <div style="display:flex;gap:8px">
+      <% if (it.messagesPage > 1) { %>
+        <a class="btn btn-ghost" href="/admin/instances/<%= it.instance.id %>?page=<%= it.messagesPage - 1 %>">← Anterior</a>
+      <% } %>
+      <% if (it.messagesPage < msgTotalPages) { %>
+        <a class="btn btn-ghost" href="/admin/instances/<%= it.instance.id %>?page=<%= it.messagesPage + 1 %>">Próxima →</a>
+      <% } %>
+    </div>
+  </div>
+  <% } %>
+</div>
+
+<div class="card">
+  <div class="page-head" style="margin-bottom:8px">
+    <h2 style="margin:0">Como enviar por esta instância</h2>
+    <a href="/admin/docs" class="back-link">Ver documentação completa →</a>
+  </div>
+  <p class="muted">Use o token desta instância no header <code>Token</code>. O roteador escolhe o melhor número conectado do pool.</p>
+  <div class="code" x-data="{ copied:false }">
+    <button type="button" class="code-copy" @click="navigator.clipboard.writeText($refs.c.innerText); copied=true; setTimeout(()=>copied=false,1500)" x-text="copied?'Copiado!':'Copiar'"></button>
+    <pre x-ref="c"><code>curl -X POST "<%= it.apiBase %>/v1/instance/<%= it.instance.id %>/messages/chat" \
+  -H "Token: <%= it.instance.token %>" \
+  -H "Content-Type: application/json" \
+  -d '{"to":"5544999990000","body":"Olá!"}'</code></pre>
+  </div>
+</div>
+
+<% if (it.numbers.some(function(n){ return n.provider === 'WUZAPI' })) { %>
+<div class="card" x-data="{ t: 'envios' }">
+  <h2>Testar recursos do WuzAPI</h2>
+  <p class="muted">Chamadas <strong>reais</strong> pela API pública, usando o token desta instância — direto daqui, sem precisar copiar/colar em outra ferramenta. Envios entram na fila normalmente (acompanhe em "Últimas mensagens" acima); ações são imediatas.</p>
+
+  <div class="tabs">
+    <button type="button" class="tab" :class="t==='envios' && 'active'" @click="t='envios'">Envios</button>
+    <button type="button" class="tab" :class="t==='acoes' && 'active'" @click="t='acoes'">Ações</button>
+  </div>
+
+  <div x-show="t==='envios'">
+    <div x-data="wuzForm('/v1/instance/<%= it.instance.id %>/messages/send', 'POST', {
+        to: '5544999990000', text: 'Seu pedido está pronto! O que deseja fazer?',
+        footer: 'Responda uma das opções abaixo',
+        buttons: JSON.stringify([
+          { type: 'quickreply', displayText: 'Confirmar' },
+          { type: 'quickreply', displayText: 'Cancelar' },
+          { type: 'url', displayText: 'Ver detalhes', url: 'https://exemplo.com/pedido/123' }
+        ], null, 2)
+      })" class="wuz-form">
+      <h3>Botões interativos</h3>
+      <div class="form">
+        <div class="grid-2">
+          <label class="field"><span>to</span><input type="text" x-model="fields.to" /></label>
+          <label class="field"><span>footer (opcional)</span><input type="text" x-model="fields.footer" /></label>
+        </div>
+        <label class="field"><span>text</span><input type="text" x-model="fields.text" /></label>
+        <label class="field"><span>buttons (JSON — até 3 quickreply + 1 url + 1 call)</span><textarea rows="6" x-model="fields.buttons"></textarea></label>
+        <button type="button" class="btn btn-primary" :disabled="loading"
+          @click="submit(() => ({ to: fields.to, type: 'BUTTONS', text: fields.text, footer: fields.footer || undefined, buttons: JSON.parse(fields.buttons) }))">
+          <span x-show="!loading">Enviar</span><span x-show="loading" x-cloak>Enviando...</span>
+        </button>
+      </div>
+      <div class="alert" :class="result && result.ok ? 'alert-ok' : 'alert-error'" x-show="result" x-cloak style="margin-top:12px">
+        <strong x-text="'HTTP ' + (result && result.status)"></strong>
+        <pre x-text="resultText" class="wuz-result"></pre>
+      </div>
+    </div>
+
+    <div x-data="wuzForm('/v1/instance/<%= it.instance.id %>/messages/send', 'POST', {
+        to: '5544999990000', latitude: '-23.5505', longitude: '-46.6333', locationName: 'Nossa loja'
+      })" class="wuz-form">
+      <h3>Localização</h3>
+      <div class="form">
+        <div class="grid-2">
+          <label class="field"><span>to</span><input type="text" x-model="fields.to" /></label>
+          <label class="field"><span>locationName (opcional)</span><input type="text" x-model="fields.locationName" /></label>
+          <label class="field"><span>latitude</span><input type="text" x-model="fields.latitude" /></label>
+          <label class="field"><span>longitude</span><input type="text" x-model="fields.longitude" /></label>
+        </div>
+        <button type="button" class="btn btn-primary" :disabled="loading"
+          @click="submit(() => ({ to: fields.to, type: 'LOCATION', latitude: Number(fields.latitude), longitude: Number(fields.longitude), locationName: fields.locationName || undefined }))">
+          <span x-show="!loading">Enviar</span><span x-show="loading" x-cloak>Enviando...</span>
+        </button>
+      </div>
+      <div class="alert" :class="result && result.ok ? 'alert-ok' : 'alert-error'" x-show="result" x-cloak style="margin-top:12px">
+        <strong x-text="'HTTP ' + (result && result.status)"></strong>
+        <pre x-text="resultText" class="wuz-result"></pre>
+      </div>
+    </div>
+
+    <div x-data="wuzForm('/v1/instance/<%= it.instance.id %>/messages/send', 'POST', {
+        to: '5544999990000', contactName: 'Suporte Loja X', contactPhone: '5544988880000'
+      })" class="wuz-form">
+      <h3>Contato (vCard)</h3>
+      <div class="form">
+        <div class="grid-2">
+          <label class="field"><span>to</span><input type="text" x-model="fields.to" /></label>
+          <label class="field"><span>contactName</span><input type="text" x-model="fields.contactName" /></label>
+          <label class="field"><span>contactPhone</span><input type="text" x-model="fields.contactPhone" /></label>
+        </div>
+        <button type="button" class="btn btn-primary" :disabled="loading"
+          @click="submit(() => ({ to: fields.to, type: 'CONTACT', contactName: fields.contactName, contactPhone: fields.contactPhone }))">
+          <span x-show="!loading">Enviar</span><span x-show="loading" x-cloak>Enviando...</span>
+        </button>
+      </div>
+      <div class="alert" :class="result && result.ok ? 'alert-ok' : 'alert-error'" x-show="result" x-cloak style="margin-top:12px">
+        <strong x-text="'HTTP ' + (result && result.status)"></strong>
+        <pre x-text="resultText" class="wuz-result"></pre>
+      </div>
+    </div>
+
+    <div x-data="wuzForm('/v1/instance/<%= it.instance.id %>/messages/send', 'POST', {
+        to: '5544999990000', text: 'Qual sua cor favorita?', pollOptions: 'Azul, Verde, Vermelho'
+      })" class="wuz-form">
+      <h3>Enquete</h3>
+      <div class="form">
+        <div class="grid-2">
+          <label class="field"><span>to</span><input type="text" x-model="fields.to" /></label>
+          <label class="field"><span>text (pergunta)</span><input type="text" x-model="fields.text" /></label>
+        </div>
+        <label class="field"><span>pollOptions (2 a 12, separadas por vírgula)</span><input type="text" x-model="fields.pollOptions" /></label>
+        <button type="button" class="btn btn-primary" :disabled="loading"
+          @click="submit(() => ({ to: fields.to, type: 'POLL', text: fields.text, pollOptions: fields.pollOptions.split(',').map(function(s){ return s.trim() }).filter(Boolean) }))">
+          <span x-show="!loading">Enviar</span><span x-show="loading" x-cloak>Enviando...</span>
+        </button>
+      </div>
+      <div class="alert" :class="result && result.ok ? 'alert-ok' : 'alert-error'" x-show="result" x-cloak style="margin-top:12px">
+        <strong x-text="'HTTP ' + (result && result.status)"></strong>
+        <pre x-text="resultText" class="wuz-result"></pre>
+      </div>
+    </div>
+
+    <div x-data="wuzForm('/v1/instance/<%= it.instance.id %>/messages/send', 'POST', {
+        to: '5544999990000', mediaUrl: 'https://exemplo.com/figurinha.webp'
+      })" class="wuz-form">
+      <h3>Figurinha (sticker)</h3>
+      <div class="form">
+        <div class="grid-2">
+          <label class="field"><span>to</span><input type="text" x-model="fields.to" /></label>
+          <label class="field"><span>mediaUrl (.webp)</span><input type="text" x-model="fields.mediaUrl" /></label>
+        </div>
+        <button type="button" class="btn btn-primary" :disabled="loading"
+          @click="submit(() => ({ to: fields.to, type: 'STICKER', mediaUrl: fields.mediaUrl }))">
+          <span x-show="!loading">Enviar</span><span x-show="loading" x-cloak>Enviando...</span>
+        </button>
+      </div>
+      <div class="alert" :class="result && result.ok ? 'alert-ok' : 'alert-error'" x-show="result" x-cloak style="margin-top:12px">
+        <strong x-text="'HTTP ' + (result && result.status)"></strong>
+        <pre x-text="resultText" class="wuz-result"></pre>
+      </div>
+    </div>
+  </div>
+
+  <div x-show="t==='acoes'" x-cloak>
+    <div x-data="wuzForm('/v1/instance/<%= it.instance.id %>/actions/presence', 'POST', { to: '5544999990000', state: 'typing' })" class="wuz-form">
+      <h3>Presença (digitando / gravando)</h3>
+      <div class="form">
+        <div class="grid-2">
+          <label class="field"><span>to</span><input type="text" x-model="fields.to" /></label>
+          <label class="field"><span>state</span>
+            <select x-model="fields.state">
+              <option value="typing">typing</option>
+              <option value="recording">recording</option>
+              <option value="paused">paused</option>
+            </select>
+          </label>
+        </div>
+        <button type="button" class="btn btn-primary" :disabled="loading"
+          @click="submit(() => ({ to: fields.to, state: fields.state }))">
+          <span x-show="!loading">Enviar</span><span x-show="loading" x-cloak>Enviando...</span>
+        </button>
+      </div>
+      <div class="alert" :class="result && result.ok ? 'alert-ok' : 'alert-error'" x-show="result" x-cloak style="margin-top:12px">
+        <strong x-text="'HTTP ' + (result && result.status)"></strong>
+        <pre x-text="resultText" class="wuz-result"></pre>
+      </div>
+    </div>
+
+    <div x-data="wuzForm('/v1/instance/<%= it.instance.id %>/actions/react', 'POST', { to: '5544999990000', messageId: 'ID_DA_MENSAGEM', emoji: '👍' })" class="wuz-form">
+      <h3>Reagir com emoji</h3>
+      <div class="form">
+        <div class="grid-2">
+          <label class="field"><span>to</span><input type="text" x-model="fields.to" /></label>
+          <label class="field"><span>messageId</span><input type="text" x-model="fields.messageId" /></label>
+        </div>
+        <label class="field"><span>emoji (vazio remove a reação)</span><input type="text" x-model="fields.emoji" /></label>
+        <button type="button" class="btn btn-primary" :disabled="loading"
+          @click="submit(() => ({ to: fields.to, messageId: fields.messageId, emoji: fields.emoji || undefined }))">
+          <span x-show="!loading">Enviar</span><span x-show="loading" x-cloak>Enviando...</span>
+        </button>
+      </div>
+      <div class="alert" :class="result && result.ok ? 'alert-ok' : 'alert-error'" x-show="result" x-cloak style="margin-top:12px">
+        <strong x-text="'HTTP ' + (result && result.status)"></strong>
+        <pre x-text="resultText" class="wuz-result"></pre>
+      </div>
+    </div>
+
+    <div x-data="wuzForm('/v1/instance/<%= it.instance.id %>/actions/read', 'POST', { to: '5544999990000', messageIds: 'ID_DA_MENSAGEM_1, ID_DA_MENSAGEM_2' })" class="wuz-form">
+      <h3>Marcar como lida</h3>
+      <div class="form">
+        <label class="field"><span>to</span><input type="text" x-model="fields.to" /></label>
+        <label class="field"><span>messageIds (separados por vírgula)</span><input type="text" x-model="fields.messageIds" /></label>
+        <button type="button" class="btn btn-primary" :disabled="loading"
+          @click="submit(() => ({ to: fields.to, messageIds: fields.messageIds.split(',').map(function(s){ return s.trim() }).filter(Boolean) }))">
+          <span x-show="!loading">Enviar</span><span x-show="loading" x-cloak>Enviando...</span>
+        </button>
+      </div>
+      <div class="alert" :class="result && result.ok ? 'alert-ok' : 'alert-error'" x-show="result" x-cloak style="margin-top:12px">
+        <strong x-text="'HTTP ' + (result && result.status)"></strong>
+        <pre x-text="resultText" class="wuz-result"></pre>
+      </div>
+    </div>
+
+    <div x-data="wuzForm('/v1/instance/<%= it.instance.id %>/actions/check-number', 'POST', { phones: '5544999990000, 5544988880000' })" class="wuz-form">
+      <h3>Verificar número no WhatsApp</h3>
+      <div class="form">
+        <label class="field"><span>phones (separados por vírgula)</span><input type="text" x-model="fields.phones" /></label>
+        <button type="button" class="btn btn-primary" :disabled="loading"
+          @click="submit(() => ({ phones: fields.phones.split(',').map(function(s){ return s.trim() }).filter(Boolean) }))">
+          <span x-show="!loading">Verificar</span><span x-show="loading" x-cloak>Verificando...</span>
+        </button>
+      </div>
+      <div class="alert" :class="result && result.ok ? 'alert-ok' : 'alert-error'" x-show="result" x-cloak style="margin-top:12px">
+        <strong x-text="'HTTP ' + (result && result.status)"></strong>
+        <pre x-text="resultText" class="wuz-result"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+<% } %>
+
+<div class="card">
+  <h2>Zona de perigo</h2>
+  <p class="muted">Apagar a instância remove <strong>definitivamente</strong> o pool de números, todas as mensagens e o histórico relacionado. Esta ação é irreversível.</p>
+  <form method="POST" action="/admin/instances/<%= it.instance.id %>/delete" x-data
+        data-confirm-msg="<%= `APAGAR DEFINITIVAMENTE a instância "${it.instance.name || it.instance.slug || it.instance.id}" e TODOS os dados (números, mensagens, histórico)? Esta ação é irreversível.` %>"
+        @submit.prevent="if (confirm($el.dataset.confirmMsg)) $el.submit()">
+    <button type="submit" class="btn btn-danger">Apagar instância</button>
+  </form>
+</div>
+
+<script>
+  // C4: componente por NÚMERO do pool. Generaliza instancePanel recebendo o
+  // numberId, batendo nos endpoints /admin/instances/:id/numbers/:numberId/...
+  function numberPanel(instanceId, numberId, initialState) {
+    return {
+      instanceId,
+      numberId,
+      state: initialState,
+      qr: null,
+      loading: false,
+      error: '',
+      _statusTimer: null,
+      _qrTimer: null,
+      _base() {
+        return '/admin/instances/' + this.instanceId + '/numbers/' + this.numberId
+      },
+      _setQr(data) {
+        if (data.qrCode) {
+          this.qr = data.qrCode.startsWith('data:') ? data.qrCode : 'data:image/png;base64,' + data.qrCode
+        }
+      },
+      async connect() {
+        this.loading = true
+        this.error = ''
+        try {
+          const res = await fetch(this._base() + '/connect', { method: 'POST' })
+          const data = await res.json()
+          if (!res.ok) {
+            this.error = data.error || 'Falha ao conectar no provider'
+          } else {
+            this._setQr(data)
+            if (data.connectionState) this.state = data.connectionState
+          }
+        } catch (e) {
+          this.error = 'Erro de rede ao conectar'
+        } finally {
+          this.loading = false
+        }
+      },
+      async refreshStatus() {
+        try {
+          const res = await fetch(this._base() + '/status')
+          if (res.ok) {
+            const data = await res.json()
+            if (data.connectionState) this.state = data.connectionState
+            if (this.state === 'CONNECTED') this.qr = null
+          }
+        } catch (e) { /* silencioso */ }
+      },
+      async refreshQr() {
+        if (this.state !== 'QR_PENDING') return
+        try {
+          const res = await fetch(this._base() + '/qr')
+          if (res.ok) {
+            const data = await res.json()
+            this._setQr(data)
+          }
+        } catch (e) { /* silencioso */ }
+      },
+      startPolling() {
+        this._statusTimer = setInterval(() => this.refreshStatus(), 3000)
+        this._qrTimer = setInterval(() => this.refreshQr(), 5000)
+      },
+    }
+  }
+
+  // Playground "Testar recursos do WuzAPI": chamada real à API pública, autenticada
+  // pelo token DESTA instância (mesmo token já exibido em "Como enviar por esta
+  // instância" — não é uma exposição nova). Sem proxy: o navegador chama a API
+  // diretamente (domínio diferente do painel — a API libera CORS pra qualquer
+  // origem via @fastify/cors { origin: true }, então a chamada cross-origin funciona).
+  const WUZ_API_BASE = '<%= it.apiBase %>'
+  const WUZ_TOKEN = '<%= it.instance.token %>'
+
+  async function wuzSend(path, method, body) {
+    try {
+      const res = await fetch(WUZ_API_BASE + path, {
+        method,
+        headers: { 'Content-Type': 'application/json', Token: WUZ_TOKEN },
+        body: body ? JSON.stringify(body) : undefined,
+      })
+      let data = null
+      try { data = await res.json() } catch (e) { /* corpo vazio/não-JSON */ }
+      return { status: res.status, ok: res.ok, body: data }
+    } catch (e) {
+      return { status: 0, ok: false, body: { error: 'Erro de rede: ' + e.message } }
+    }
+  }
+
+  // Fábrica reaproveitada por cada card do playground: guarda os campos do
+  // formulário (fields), o resultado da última chamada e o estado de loading.
+  function wuzForm(path, method, fields) {
+    return {
+      fields,
+      loading: false,
+      result: null,
+      async submit(bodyBuilder) {
+        let body
+        try {
+          body = bodyBuilder()
+        } catch (e) {
+          this.result = { status: 0, ok: false, body: { error: 'Campo inválido: ' + e.message } }
+          return
+        }
+        this.loading = true
+        this.result = await wuzSend(path, method, body)
+        this.loading = false
+      },
+      get resultText() {
+        return this.result ? JSON.stringify(this.result.body, null, 2) : ''
+      },
+    }
+  }
+</script>

@@ -1,0 +1,242 @@
+<div class="page-head">
+  <div>
+    <h1>Monitor</h1>
+    <p class="subtitle">Acompanhamento ao vivo de filas, mensagens e campanhas. Atualiza sozinho a cada 4s.</p>
+  </div>
+  <span class="muted" x-data x-text="'Atualizado: ' + (window.__monitorUpdated || '—')"></span>
+</div>
+
+<% if (it.campOk) { %>
+  <div class="alert alert-ok"><%= it.campOk %></div>
+<% } %>
+<% if (it.campErr) { %>
+  <div class="alert alert-error"><%= it.campErr %></div>
+<% } %>
+
+<div class="card">
+  <h2>Nova campanha (disparo em lote)</h2>
+  <p class="muted">Monta um lote de mensagens pra uma lista de destinos, reaproveitando a mesma fila e o mesmo anti-flood por destinatário dos envios individuais. Para recursos avançados (mídia, idempotência por prefixo), use a <a href="/admin/docs">API</a>.</p>
+  <form method="POST" action="/admin/campaigns" class="form">
+    <label class="field">
+      <span>Nome do lote (opcional)</span>
+      <input type="text" name="nome" placeholder="Ex.: Promoção de setembro" maxlength="120" />
+    </label>
+    <label class="field">
+      <span>Instância (opcional — vazio usa o roteamento automático da conta)</span>
+      <select name="instanceId">
+        <option value="">— Automático —</option>
+        <% it.instances.forEach(function(i){ %>
+          <option value="<%= i.id %>"><%= i.name || i.slug || i.id %></option>
+        <% }) %>
+      </select>
+    </label>
+    <label class="field">
+      <span>Destinatários (um por linha, com DDI — ex.: 5544999990000)</span>
+      <textarea name="destinatarios" rows="5" required placeholder="5544999990000&#10;5544988880000"></textarea>
+    </label>
+    <label class="field">
+      <span>Mensagem</span>
+      <textarea name="mensagem" rows="3" required placeholder="Digite a mensagem do lote..."></textarea>
+    </label>
+    <button type="submit" class="btn btn-primary">Criar campanha</button>
+  </form>
+</div>
+
+<%
+  // nome de conta ou instancia (dado do usuario) entra cru aqui embaixo,
+  // como literal JS bruto (nao string entre aspas). Sem isso, um nome contendo
+  // a sequencia de fechamento de script fecharia a tag e rodaria sozinho, sem
+  // clique nenhum, assim que o OWNER abre o painel. JSON.stringify sozinho NAO
+  // protege (nao escapa "<"). Escapamos "<", ">" e "&" para \uXXXX, que o motor
+  // JS do navegador interpreta de volta como o caractere original ao montar o
+  // literal - sem nunca deixar a sequencia de abertura/fechamento de tag crua.
+  function safeJson(value) {
+    return JSON.stringify(value)
+      .replace(/</g, '\\u003c')
+      .replace(/>/g, '\\u003e')
+      .replace(/&/g, '\\u0026')
+  }
+%>
+<script>
+  window.__MONITOR__ = {
+    isSuperAdmin: <%~ it.isSuperAdmin ? 'true' : 'false' %>,
+    queues: <%~ safeJson(it.queues) %>,
+    messages: <%~ safeJson(it.messages) %>,
+    messagesTotal: <%~ safeJson(it.messagesTotal) %>,
+    messagesPage: <%~ safeJson(it.messagesPage) %>,
+    messagesLimit: <%~ safeJson(it.messagesLimit) %>,
+    campaigns: <%~ safeJson(it.campaigns) %>,
+    instances: <%~ safeJson(it.instances) %>,
+    statuses: <%~ safeJson(it.statuses) %>,
+    filterStatus: <%~ safeJson(it.filterStatus) %>,
+    filterInstanceId: <%~ safeJson(it.filterInstanceId) %>
+  };
+  function monitorPanel() {
+    return {
+      isSuperAdmin: window.__MONITOR__.isSuperAdmin,
+      queues: window.__MONITOR__.queues,
+      messages: window.__MONITOR__.messages || [],
+      messagesTotal: window.__MONITOR__.messagesTotal || 0,
+      messagesPage: window.__MONITOR__.messagesPage || 1,
+      messagesLimit: window.__MONITOR__.messagesLimit || 25,
+      campaigns: window.__MONITOR__.campaigns || [],
+      instances: window.__MONITOR__.instances || [],
+      statuses: window.__MONITOR__.statuses || [],
+      filterStatus: window.__MONITOR__.filterStatus || '',
+      filterInstanceId: window.__MONITOR__.filterInstanceId || '',
+      _timer: null,
+      // Distinto de "sem dados": sessionExpired é sessão morta (cookie expirado/
+      // revogado) — refreshError é qualquer outra falha de rede/servidor no polling.
+      sessionExpired: false,
+      refreshError: null,
+      init() { this._timer = setInterval(() => this.refresh(), 4000); },
+      get messagesTotalPages() { return Math.max(1, Math.ceil(this.messagesTotal / this.messagesLimit)); },
+      resetAndRefresh() { this.messagesPage = 1; this.refresh(); },
+      prevPage() { if (this.messagesPage > 1) { this.messagesPage--; this.refresh(); } },
+      nextPage() { if (this.messagesPage < this.messagesTotalPages) { this.messagesPage++; this.refresh(); } },
+      _query() {
+        const p = new URLSearchParams();
+        if (this.filterStatus) p.set('status', this.filterStatus);
+        if (this.filterInstanceId) p.set('instanceId', this.filterInstanceId);
+        if (this.messagesPage > 1) p.set('page', String(this.messagesPage));
+        const s = p.toString();
+        return s ? ('?' + s) : '';
+      },
+      async refresh() {
+        try {
+          // redirect: 'manual' evita seguir o 302 pro login — sem isso, fetch()
+          // segue o redirect, r.json() falha (é HTML), e caía no catch silencioso
+          //. Com 'manual', a resposta de um redirect vem como
+          // type: 'opaqueredirect' (status 0), sem baixar o HTML de login.
+          const r = await fetch('/admin/monitor/data' + this._query(), { redirect: 'manual' });
+          if (r.type === 'opaqueredirect' || r.status === 0) {
+            this.sessionExpired = true;
+            if (this._timer) { clearInterval(this._timer); this._timer = null; }
+            return;
+          }
+          if (!r.ok) {
+            this.refreshError = 'Falha ao atualizar os dados (HTTP ' + r.status + '). Tentando novamente...';
+            return;
+          }
+          const d = await r.json();
+          this.queues = d.queues; this.messages = d.messages || []; this.campaigns = d.campaigns || [];
+          this.messagesTotal = d.messagesTotal || 0; this.messagesPage = d.messagesPage || 1; this.messagesLimit = d.messagesLimit || this.messagesLimit;
+          this.refreshError = null;
+          window.__monitorUpdated = new Date().toLocaleTimeString('pt-BR');
+        } catch (e) {
+          this.refreshError = 'Falha ao atualizar os dados — verifique sua conexão. Tentando novamente...';
+        }
+      },
+      fmt(s) { return s ? new Date(s).toLocaleString('pt-BR') : '—'; },
+      pct(c) { return c.total ? Math.round(((c.sent + c.failed) / c.total) * 100) : 0; }
+    }
+  }
+</script>
+
+<div x-data="monitorPanel()">
+
+  <!-- Sessão expirada durante o polling — distinto de "sem dados": aqui os dados
+       podem estar visíveis mas parados, então avisa que pararam de atualizar. -->
+  <div class="alert alert-error" x-show="sessionExpired" x-cloak>
+    Sua sessão expirou. Os dados acima <strong>pararam de atualizar</strong>.
+    <a href="/admin/login">Clique aqui para entrar novamente</a>.
+  </div>
+
+  <!-- Falha transitória de refresh (rede/servidor), não é sessão expirada nem
+       "sem dados" — o polling continua tentando sozinho. -->
+  <div class="alert alert-error" x-show="refreshError && !sessionExpired" x-cloak x-text="refreshError"></div>
+
+  <!-- Filas (só super admin) -->
+  <% if (it.isSuperAdmin) { %>
+  <div class="card">
+    <h2>Filas (plataforma)</h2>
+    <p class="muted">Jobs em processamento no BullMQ (Redis). Visão global da plataforma.</p>
+    <table class="instances-table">
+      <thead><tr><th>Fila</th><th>Aguardando</th><th>Ativos</th><th>Atrasados</th><th>Concluídos</th><th>Falhos (DLQ)</th></tr></thead>
+      <tbody>
+        <template x-for="(q, name) in (queues || {})" :key="name">
+          <tr>
+            <td><strong x-text="name === 'sendMessage' ? 'Envio de mensagens' : (name === 'webhook' ? 'Webhooks' : name)"></strong></td>
+            <td x-text="q.waiting ?? 0"></td>
+            <td x-text="q.active ?? 0"></td>
+            <td x-text="q.delayed ?? 0"></td>
+            <td x-text="q.completed ?? 0"></td>
+            <td x-text="q.failed ?? 0"></td>
+          </tr>
+        </template>
+        <tr x-show="!queues"><td colspan="6" class="muted center">Sem dados de fila.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <% } %>
+
+  <!-- Campanhas (lotes) -->
+  <div class="card">
+    <h2>Campanhas (lotes)</h2>
+    <table class="instances-table">
+      <thead><tr><th>Lote</th><th>Instância</th><th>Progresso</th><th>Na fila</th><th>Enviadas</th><th>Falhas</th><th>Quando</th></tr></thead>
+      <tbody>
+        <template x-for="c in campaigns" :key="c.id">
+          <tr>
+            <td><strong x-text="c.name || ('Lote ' + c.id.slice(-6))"></strong></td>
+            <td class="muted" x-text="c.instance ? (c.instance.name || c.instance.slug) : '—'"></td>
+            <td style="min-width:140px">
+              <div style="background:var(--border);border-radius:6px;height:8px;overflow:hidden">
+                <div :style="'height:8px;width:' + pct(c) + '%;background:#2563eb'"></div>
+              </div>
+              <span class="muted" x-text="(c.sent + c.failed) + '/' + c.total + ' (' + pct(c) + '%)'"></span>
+            </td>
+            <td x-text="c.queued"></td>
+            <td x-text="c.sent"></td>
+            <td x-text="c.failed"></td>
+            <td class="muted" x-text="fmt(c.createdAt)"></td>
+          </tr>
+        </template>
+        <tr x-show="campaigns.length === 0"><td colspan="7" class="muted center">Nenhuma campanha ainda.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Mensagens recentes -->
+  <div class="card">
+    <div class="page-head">
+      <h2>Mensagens recentes</h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select x-model="filterStatus" @change="resetAndRefresh()" style="padding:6px 8px">
+          <option value="">Todos os status</option>
+          <template x-for="s in statuses" :key="s"><option :value="s" x-text="s"></option></template>
+        </select>
+        <select x-model="filterInstanceId" @change="resetAndRefresh()" style="padding:6px 8px">
+          <option value="">Todas as instâncias</option>
+          <template x-for="i in instances" :key="i.id"><option :value="i.id" x-text="i.name || i.slug || i.id"></option></template>
+        </select>
+        <button type="button" class="btn btn-ghost" @click="filterStatus=''; filterInstanceId=''; resetAndRefresh()">Limpar</button>
+      </div>
+    </div>
+    <table class="instances-table">
+      <thead><tr><th>Destino</th><th>Tipo</th><th>Status</th><th>Instância</th><th>Enviado por</th><th>Quando</th><th>Erro</th></tr></thead>
+      <tbody>
+        <template x-for="m in messages" :key="m.id">
+          <tr>
+            <td x-text="m.toPhone"></td>
+            <td x-text="m.type"></td>
+            <td><span class="badge badge-msg" x-text="m.status"></span></td>
+            <td class="muted" x-text="m.instance ? (m.instance.name || m.instance.slug) : '—'"></td>
+            <td class="muted" x-text="m.sentBy || 'API/sistema'"></td>
+            <td class="muted" x-text="fmt(m.createdAt)"></td>
+            <td class="muted" x-text="m.errorMessage || ''"></td>
+          </tr>
+        </template>
+        <tr x-show="messages.length === 0"><td colspan="7" class="muted center">Nenhuma mensagem para o filtro atual.</td></tr>
+      </tbody>
+    </table>
+    <div class="page-head" style="margin-top:12px" x-show="messagesTotal > 0">
+      <span class="muted" x-text="messagesTotal + ' mensagem' + (messagesTotal === 1 ? '' : 'ns') + ' no total · página ' + messagesPage + ' de ' + messagesTotalPages"></span>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btn btn-ghost" @click="prevPage()" :disabled="messagesPage <= 1">← Anterior</button>
+        <button type="button" class="btn btn-ghost" @click="nextPage()" :disabled="messagesPage >= messagesTotalPages">Próxima →</button>
+      </div>
+    </div>
+  </div>
+
+</div>

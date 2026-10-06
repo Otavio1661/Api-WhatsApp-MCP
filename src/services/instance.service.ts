@@ -1,0 +1,772 @@
+// src/services/instance.service.ts
+// Lógica compartilhada de instâncias (gestão/QR/status) reusada tanto pela API REST
+// (src/routes/instances.route.ts) quanto pelo painel web (src/web/panel.route.ts).
+// NÃO contém regra de negócio nova: apenas centraliza o que antes estava inline na rota.
+import { Prisma, type Instance, type InstanceNumber, type InstanceConnState, type Provider } from '@prisma/client'
+import type { FastifyBaseLogger } from 'fastify'
+import { prisma } from '../utils/prisma'
+import { config } from '../config'
+import { providers } from '../providers'
+import { slugify, slugSchema } from '../utils/slug'
+import { dispatchWebhook } from './notification.service'
+import {
+  encryptSecret,
+  hashForLookup,
+  decryptSecretIfNeeded,
+  decryptInstanceSecrets,
+  generateSecretValue,
+} from '../utils/secrets-crypto'
+
+// Tempo de validade do QR em segundos
+export const QR_TTL_SECONDS = 45
+
+// Erro de negócio das operações de instância (ex.: nome/slug duplicado).
+// O caller decide o mapeamento: API REST → status HTTP (409); painel → ?err=.
+export class InstanceError extends Error {
+  constructor(
+    message: string,
+    public readonly code:
+      | 'NAME_TAKEN'
+      | 'SLUG_TAKEN'
+      | 'NOT_FOUND'
+      | 'INVALID_SLUG'
+      | 'QUOTA_EXCEEDED',
+  ) {
+    super(message)
+    this.name = 'InstanceError'
+  }
+}
+
+// Normaliza um slug explícito (kebab-case) e VALIDA o resultado. Defesa em
+// profundidade: mesmo que o slug chegue sem passar pelo Zod do caller, um
+// resultado vazio/curto/invalido após o slugify é rejeitado (em vez de gravar
+// um slug quebrado no banco).
+function normalizeExplicitSlug(input: string): string {
+  const normalized = slugify(input)
+  const parsed = slugSchema.safeParse(normalized)
+  if (!parsed.success) {
+    throw new InstanceError(
+      parsed.error.issues[0]?.message ?? 'Slug inválido após normalização.',
+      'INVALID_SLUG',
+    )
+  }
+  return normalized
+}
+
+// Identifica violação de unicidade do Prisma (P2002) e diz qual coluna bateu.
+// Usado para distinguir conflito de slug (global) de conflito de name (por tenant).
+function uniqueViolationTarget(err: unknown): 'slug' | 'name' | 'other' | null {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') {
+    return null
+  }
+  const target = err.meta?.target
+  const fields = Array.isArray(target) ? target.join(',') : String(target ?? '')
+  if (fields.includes('slug')) return 'slug'
+  if (fields.includes('name')) return 'name'
+  return 'other'
+}
+
+// Gera um slug único GLOBAL a partir de uma base, adicionando sufixo numérico
+// em caso de colisão (vendas-sp, vendas-sp-2, vendas-sp-3...). Reusado no
+// backfill e na criação de instância. `ignoreId` permite ignorar a própria
+// instância ao renomear.
+export async function generateUniqueSlug(base: string, ignoreId?: string): Promise<string> {
+  const root = slugify(base) || 'instancia'
+  let candidate = root
+  let n = 1
+  // Loop limitado a colisões reais; na prática para em 1–2 iterações.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const existing = await prisma.instance.findUnique({
+      where: { slug: candidate },
+      select: { id: true },
+    })
+    if (!existing || existing.id === ignoreId) return candidate
+    n += 1
+    candidate = `${root}-${n}`
+  }
+}
+
+// Monta a representação gateway da instância, incluindo apiUrl pública.
+// decripta token/webhookSecret (transparente pro dado legado ainda
+// em texto puro) e remove o `tokenHash` interno (índice cego de busca — não é
+// pra ir pro cliente/painel, é implementação do auth middleware).
+export function toInstanceResponse(instance: Instance) {
+  const { tokenHash: _tokenHash, ...rest } = instance as Instance & { tokenHash?: string | null }
+  return {
+    ...decryptInstanceSecrets(rest),
+    apiUrl: `${config.app.apiPublicUrl}/v1/instance/${instance.id}`,
+  }
+}
+
+// URL pública da API da instância (coluna "API URL" do painel).
+export function instanceApiUrl(instance: Pick<Instance, 'id'>): string {
+  return `${config.app.apiPublicUrl}/v1/instance/${instance.id}`
+}
+
+// Mapeia o status do provider para o connectionState do banco.
+export function mapConnectionState(
+  status: string,
+  current: Instance['connectionState'],
+): Instance['connectionState'] {
+  switch (status) {
+    case 'connected':
+      return 'CONNECTED'
+    case 'disconnected':
+      return 'DISCONNECTED'
+    case 'qr_required':
+      return 'QR_PENDING'
+    case 'banned':
+      return 'BANNED'
+    default:
+      return current // 'unknown' → mantém o estado atual
+  }
+}
+
+// Cria a instância no provider na 1ª vez (persistindo instanceId) e renova o QR
+// via connect(). Centraliza a lógica compartilhada entre connect e qr.
+// Retorna a instância atualizada. Lança em caso de erro do provider.
+export async function refreshQr(instance: Instance): Promise<Instance> {
+  const provider = providers[instance.provider]
+  let providerInstanceId = instance.instanceId
+  let qrCode: string | undefined
+
+  if (!providerInstanceId) {
+    // 1ª conexão: cria a instância no provider e persiste o instanceId
+    const created = await provider.createInstance(`inst-${instance.id}`)
+    providerInstanceId = created.instanceId
+    qrCode = created.qrCode
+  } else {
+    // Já existe no provider: reconecta para obter o QR atual (sem recriar).
+    // Auto-recuperação: se a sessão sumiu no provider (404), recria com o mesmo nome.
+    try {
+      const result = await provider.connect(providerInstanceId)
+      qrCode = result.qrCode
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        const created = await provider.createInstance(providerInstanceId)
+        providerInstanceId = created.instanceId
+        qrCode = created.qrCode
+      } else {
+        throw err
+      }
+    }
+  }
+
+  // O QR da Evolution v2 chega de forma assíncrona via webhook (QRCODE_UPDATED).
+  // Aqui o provider pode devolver vazio: nesse caso NÃO sobrescrevemos o qrCode
+  // já persistido (evita "apagar" um QR válido). O TTL só é renovado quando há
+  // QR novo vindo do provider.
+  return prisma.instance.update({
+    where: { id: instance.id },
+    data: {
+      instanceId: providerInstanceId,
+      qrCode: qrCode ?? instance.qrCode,
+      ...(qrCode ? { qrExpiresAt: new Date(Date.now() + QR_TTL_SECONDS * 1000) } : {}),
+      connectionState: 'QR_PENDING',
+    },
+  })
+}
+
+// Registra a URL de webhook inbound no provider (best-effort).
+// Não lança: falha aqui não deve bloquear o connect (logamos e seguimos).
+export async function registerInboundWebhook(
+  instance: Instance,
+  log: FastifyBaseLogger,
+): Promise<void> {
+  try {
+    const provider = providers[instance.provider]
+    const providerInstanceId = instance.instanceId ?? `inst-${instance.id}`
+    const url = `${config.app.publicBaseUrl}/v1/webhooks/inbound/${instance.provider.toLowerCase()}/${instance.id}?ws=${decryptSecretIfNeeded(instance.webhookSecret)}`
+    await provider.setWebhook(providerInstanceId, url)
+    log.info(`[Instances] webhook inbound registrado (${instance.provider}): ${url}`)
+  } catch (err: any) {
+    log.warn(`[Instances] setWebhook falhou (${instance.provider}, best-effort): ${err.message}`)
+  }
+}
+
+// ── Operações de alto nível (escopadas por tenant) ───────────────
+// Reusadas por API e painel. Todas recebem apiClientId para garantir o escopo.
+
+// Lista instâncias da conta. `ownerUserId` (opcional) restringe ao dono — usado
+// para o escopo de MEMBER (vê só as suas). Ausente = todas as da conta (OWNER/admin).
+// decripta token/webhookSecret antes de devolver — usada tanto por
+// telas que só precisam de id/nome quanto pela página de docs (panel.route.ts),
+// que exibe o token de exemplo; decriptar sempre aqui é mais seguro do que
+// confiar que todo call site atual/futuro lembre de fazer isso por conta própria.
+export async function listInstances(apiClientId: string, ownerUserId?: string) {
+  const instances = await prisma.instance.findMany({
+    where: { apiClientId, ...(ownerUserId ? { ownerUserId } : {}) },
+    orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+  })
+  return instances.map(decryptInstanceSecrets)
+}
+
+export function findInstanceScoped(id: string, apiClientId: string) {
+  return prisma.instance.findFirst({ where: { id, apiClientId } })
+}
+
+// Deriva o "status de autenticação" de uma instância a partir dos números do pool —
+// que é a fonte de verdade do envio desde a fase C3 (o roteador só usa números
+// CONNECTED). O Instance.connectionState é legado e não reflete mais o pool.
+//   CONNECTED   → ao menos um número conectado (pronto para enviar)
+//   QR_PENDING  → nenhum conectado, mas algum aguardando leitura do QR
+//   DISCONNECTED→ nenhum dos acima (inclui pool vazio)
+export function deriveConnectionState(
+  numbers: Array<Pick<InstanceNumber, 'connectionState'>> | null | undefined,
+): InstanceConnState {
+  const list = numbers ?? []
+  if (list.some((n) => n.connectionState === 'CONNECTED')) return 'CONNECTED'
+  if (list.some((n) => n.connectionState === 'QR_PENDING')) return 'QR_PENDING'
+  return 'DISCONNECTED'
+}
+
+// Lista as instâncias da conta (escopo opcional de MEMBER) já com o status de
+// conexão DERIVADO do pool (campo `connection`), para o dashboard refletir o estado real.
+export async function listInstancesWithConnection(apiClientId: string, ownerUserId?: string) {
+  const instances = await prisma.instance.findMany({
+    where: { apiClientId, ...(ownerUserId ? { ownerUserId } : {}) },
+    orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+    include: { numbers: { select: { connectionState: true } } },
+  })
+  return instances.map(({ numbers, ...inst }) => ({
+    ...decryptInstanceSecrets(inst),
+    connection: deriveConnectionState(numbers),
+  }))
+}
+
+// Visão GLOBAL (super admin): todas as instâncias de todas as contas, com o nome
+// da conta dona. NÃO escopada por tenant — usar apenas atrás de requireSuperAdmin.
+// decripta token/webhookSecret antes de devolver (GET /admin/instances
+// manda esse retorno direto na resposta).
+export async function listAllInstances() {
+  const instances = await prisma.instance.findMany({
+    orderBy: { createdAt: 'desc' },
+    include: { apiClient: { select: { id: true, name: true, active: true } } },
+  })
+  // tokenHash é implementação interna do auth middleware (índice cego de
+  // busca) — não deve ir na resposta de GET /admin/instances, mesma regra de
+  // toInstanceResponse().
+  return instances.map((instance) => {
+    const { tokenHash: _tokenHash, ...inst } = instance as typeof instance & { tokenHash?: string | null }
+    return decryptInstanceSecrets(inst)
+  })
+}
+
+// Resolve a instância por id OU slug, sempre escopada ao tenant. Usada pelas
+// rotas REST/painel que aceitam tanto o cuid quanto o slug amigável na URL.
+// `ownerUserId` (opcional) restringe ao dono — escopo de MEMBER: se a instância
+// não for dele, retorna null (o caller responde 404, sem vazar existência).
+export function findInstanceByIdOrSlug(idOrSlug: string, apiClientId: string, ownerUserId?: string) {
+  return prisma.instance.findFirst({
+    where: {
+      apiClientId,
+      OR: [{ id: idOrSlug }, { slug: idOrSlug }],
+      ...(ownerUserId ? { ownerUserId } : {}),
+    },
+  })
+}
+
+// Garante que a conta não excedeu a quota de instâncias. SUPER_ADMIN deve PULAR
+// esta checagem (não chamar). Lança InstanceError('QUOTA_EXCEEDED') [403].
+export async function assertInstanceQuota(apiClientId: string): Promise<void> {
+  const client = await prisma.apiClient.findUnique({
+    where: { id: apiClientId },
+    select: { maxInstances: true },
+  })
+  const max = client?.maxInstances ?? 1
+  const count = await prisma.instance.count({ where: { apiClientId } })
+  if (count >= max) {
+    throw new InstanceError(
+      `Limite de instâncias da conta atingido (${max}). Contate o administrador para aumentar.`,
+      'QUOTA_EXCEEDED',
+    )
+  }
+}
+
+// gera os 3 campos sensíveis prontos pra INSERT — `token`/`webhookSecret`
+// JÁ CIFRADOS (o @default(cuid()) do Prisma foi removido de propósito: a geração
+// precisa acontecer em código pra poder cifrar+hashear ANTES do INSERT) e
+// `tokenHash` (índice cego de busca). Usar em TODO prisma.instance.create().
+// Os valores em claro não precisam ser devolvidos ao caller: toInstanceResponse()
+// decripta de volta a partir do que foi salvo.
+export function newInstanceSecretFields() {
+  const plainToken = generateSecretValue()
+  return {
+    token: encryptSecret(plainToken),
+    // MESMO valor em claro do `token` acima — o hash tem que corresponder ao
+    // que foi cifrado, senão o auth middleware nunca encontra o registro pelo
+    // índice cego (bug fácil de cometer: gerar um valor novo por engano aqui).
+    tokenHash: hashForLookup(plainToken),
+    webhookSecret: encryptSecret(generateSecretValue()),
+  }
+}
+
+// Cria a instância.
+// - slug EXPLÍCITO: respeitado tal qual (apenas normalizado p/ kebab-case). Se já
+//   existir, o banco rejeita (P2002) → InstanceError('SLUG_TAKEN') [409]. O usuário
+//   pediu aquele slug específico, então não o "renomeamos" silenciosamente.
+// - slug DERIVADO (do name/provider, quando não informado): gerado com sufixo numérico
+//   em colisão, para que a criação nunca falhe por slug.
+// Conflito de name por tenant → InstanceError('NAME_TAKEN').
+export async function createInstance(input: {
+  name?: string
+  slug?: string
+  provider: Instance['provider']
+  priority?: number
+  apiClientId: string
+  // Dono (usuário) da instância. MEMBER que cria vira dono; ausente = sem dono.
+  ownerUserId?: string | null
+}): Promise<Instance> {
+  const slug = input.slug
+    ? normalizeExplicitSlug(input.slug)
+    : await generateUniqueSlug(input.name ?? input.provider.toLowerCase())
+
+  try {
+    return await prisma.instance.create({
+      data: {
+        name: input.name,
+        slug,
+        provider: input.provider,
+        priority: input.priority ?? 0,
+        apiClientId: input.apiClientId,
+        ownerUserId: input.ownerUserId ?? null,
+        ...newInstanceSecretFields(),
+      },
+    })
+  } catch (err) {
+    throw mapUniqueViolation(err)
+  }
+}
+
+// Junta assertInstanceQuota() + createInstance() numa única transação, travando
+// a linha do ApiClient ANTES de contar — sem isso, duas criações quase
+// simultâneas (double-click, 2 requests em paralelo) liam a mesma contagem
+// antes de qualquer INSERT completar e furavam o `maxInstances` do plano.
+// Usar esta função em vez de chamar as duas separadas (SUPER_ADMIN continua
+// pulando a checagem, chamando createInstance() direto, como já faz hoje).
+export async function createInstanceWithQuota(input: {
+  name?: string
+  slug?: string
+  provider: Instance['provider']
+  priority?: number
+  apiClientId: string
+  ownerUserId?: string | null
+}): Promise<Instance> {
+  const slug = input.slug
+    ? normalizeExplicitSlug(input.slug)
+    : await generateUniqueSlug(input.name ?? input.provider.toLowerCase())
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      // Trava a linha da conta primeiro: serializa tentativas concorrentes de
+      // criar instância para o MESMO apiClientId — só assim o count() logo
+      // abaixo fica confiável (nenhuma outra transação pode inserir entre o
+      // count e o create enquanto esta não commitar/abortar).
+      await tx.$queryRaw`SELECT id FROM "ApiClient" WHERE id = ${input.apiClientId} FOR UPDATE`
+
+      const client = await tx.apiClient.findUnique({
+        where: { id: input.apiClientId },
+        select: { maxInstances: true },
+      })
+      const max = client?.maxInstances ?? 1
+      const count = await tx.instance.count({ where: { apiClientId: input.apiClientId } })
+      if (count >= max) {
+        throw new InstanceError(
+          `Limite de instâncias da conta atingido (${max}). Contate o administrador para aumentar.`,
+          'QUOTA_EXCEEDED',
+        )
+      }
+
+      return tx.instance.create({
+        data: {
+          name: input.name,
+          slug,
+          provider: input.provider,
+          priority: input.priority ?? 0,
+          apiClientId: input.apiClientId,
+          ownerUserId: input.ownerUserId ?? null,
+          ...newInstanceSecretFields(),
+        },
+      })
+    })
+  } catch (err) {
+    if (err instanceof InstanceError) throw err
+    throw mapUniqueViolation(err)
+  }
+}
+
+// (Re)atribui o dono de uma instância — exclusivo do OWNER. Valida que a instância
+// é da conta e que o novo dono (quando informado) é usuário da MESMA conta.
+// `ownerUserId = null` remove o dono (volta a ser de nível de conta).
+// Lança InstanceError('NOT_FOUND') se a instância ou o usuário-alvo não pertencerem à conta.
+export async function assignInstanceOwner(input: {
+  instanceId: string
+  apiClientId: string
+  ownerUserId: string | null
+}): Promise<Instance> {
+  const existing = await prisma.instance.findFirst({
+    where: { id: input.instanceId, apiClientId: input.apiClientId },
+    select: { id: true },
+  })
+  if (!existing) {
+    throw new InstanceError('Instância não encontrada', 'NOT_FOUND')
+  }
+
+  if (input.ownerUserId) {
+    const target = await prisma.user.findFirst({
+      where: { id: input.ownerUserId, apiClientId: input.apiClientId },
+      select: { id: true },
+    })
+    if (!target) {
+      throw new InstanceError('Usuário-alvo não pertence a esta conta', 'NOT_FOUND')
+    }
+  }
+
+  return prisma.instance.update({
+    where: { id: existing.id },
+    data: { ownerUserId: input.ownerUserId },
+  })
+}
+
+// Atualiza name e/ou slug de uma instância (renomear), escopado por tenant.
+// Valida unicidade (global p/ slug; por tenant p/ name) e mapeia P2002 → InstanceError.
+// Lança InstanceError('NOT_FOUND') se a instância não for do tenant.
+export async function updateInstance(input: {
+  id: string
+  apiClientId: string
+  name?: string
+  slug?: string
+}): Promise<Instance> {
+  const existing = await prisma.instance.findFirst({
+    where: { id: input.id, apiClientId: input.apiClientId },
+  })
+  if (!existing) {
+    throw new InstanceError('Instância não encontrada', 'NOT_FOUND')
+  }
+
+  const data: Prisma.InstanceUpdateInput = {}
+  if (input.name !== undefined) data.name = input.name || null
+  if (input.slug !== undefined) {
+    // Slug informado no rename é normalizado E validado (defesa em profundidade).
+    // Colisão com OUTRA instância → P2002 → InstanceError('SLUG_TAKEN') [409] abaixo.
+    data.slug = normalizeExplicitSlug(input.slug)
+  }
+
+  try {
+    return await prisma.instance.update({ where: { id: existing.id }, data })
+  } catch (err) {
+    throw mapUniqueViolation(err)
+  }
+}
+
+// Converte P2002 do Prisma em InstanceError tratável (slug/name); relança o resto.
+function mapUniqueViolation(err: unknown): unknown {
+  const target = uniqueViolationTarget(err)
+  if (target === 'slug') return new InstanceError('Slug já está em uso', 'SLUG_TAKEN')
+  if (target === 'name') return new InstanceError('Nome já está em uso nesta conta', 'NAME_TAKEN')
+  return err
+}
+
+// Resultado de uma conexão: ou QR (provider com fluxo de QR) ou já conectado (Cloud API).
+export interface ConnectResult {
+  instanceId: string | null
+  qrCode: string | null
+  qrExpiresAt: Date | null
+  connectionState: Instance['connectionState']
+}
+
+// Conecta a instância: Cloud API vira CONNECTED; demais geram/renova QR.
+// Registra o webhook inbound (best-effort) antes do createInstance.
+// Lança em caso de erro do provider (caller decide o status HTTP — 502).
+export async function connectInstance(
+  instance: Instance,
+  log: FastifyBaseLogger,
+): Promise<ConnectResult> {
+  if (instance.provider === 'CLOUD_API') {
+    const updated = await prisma.instance.update({
+      where: { id: instance.id },
+      data: { connectionState: 'CONNECTED', qrCode: null, qrExpiresAt: null },
+    })
+    return {
+      instanceId: updated.instanceId,
+      qrCode: null,
+      qrExpiresAt: null,
+      connectionState: updated.connectionState,
+    }
+  }
+
+  // Webhook ANTES e DEPOIS de criar/renovar a sessão (mesma razão de connectNumber):
+  // Evolution só aceita setWebhook após a sessão `inst-<id>` existir; WuzAPI aceita
+  // a qualquer momento. registerInboundWebhook é best-effort (idempotente).
+  await registerInboundWebhook(instance, log)
+  const updated = await refreshQr(instance)
+  await registerInboundWebhook(updated, log)
+  return {
+    instanceId: updated.instanceId,
+    qrCode: updated.qrCode,
+    qrExpiresAt: updated.qrExpiresAt,
+    connectionState: updated.connectionState,
+  }
+}
+
+// ── Fase C1: pool de números (InstanceNumber) ────────────────────
+// Helpers ADITIVOS. Nesta fase o roteamento/QR/envio NÃO usa estes números
+// (continua usando os campos da Instance). C2/C3/C4 religam a lógica aqui.
+
+// Lista os números de uma instância, em ordem de prioridade (menor = primeiro).
+export function listNumbers(instanceId: string): Promise<InstanceNumber[]> {
+  return prisma.instanceNumber.findMany({
+    where: { instanceId },
+    orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+  })
+}
+
+// Cria um número (InstanceNumber) sob uma instância.
+export function createNumber(input: {
+  instanceId: string
+  provider: Provider
+  label?: string
+  priority?: number
+}): Promise<InstanceNumber> {
+  return prisma.instanceNumber.create({
+    data: {
+      instanceId: input.instanceId,
+      provider: input.provider,
+      label: input.label,
+      priority: input.priority ?? 0,
+    },
+  })
+}
+
+// Busca um número por id garantindo que pertence a uma instância do tenant
+// (escopo via instance.apiClientId). Retorna null se não for do tenant.
+export function findNumberScoped(
+  numberId: string,
+  apiClientId: string,
+): Promise<InstanceNumber | null> {
+  return prisma.instanceNumber.findFirst({
+    where: { id: numberId, instance: { apiClientId } },
+  })
+}
+
+// ── Fase C2: conexão/QR/status POR NÚMERO + gestão do pool ───────
+// Operações ADITIVAS que ESPELHAM as de Instance (connectInstance/refreshQr/
+// syncInstanceStatus/registerInboundWebhook), mas escrevem no InstanceNumber.
+// NÃO alteram roteamento/envio/reset (isso é C3). Todas escopadas por tenant
+// via instance.apiClientId.
+
+// Adiciona um número (InstanceNumber) sob uma instância do tenant.
+// Valida que a instância pertence ao tenant (senão InstanceError NOT_FOUND).
+export async function addNumber(input: {
+  instanceId: string
+  provider: Provider
+  label?: string
+  priority?: number
+  apiClientId: string
+}): Promise<InstanceNumber> {
+  const instance = await prisma.instance.findFirst({
+    where: { id: input.instanceId, apiClientId: input.apiClientId },
+    select: { id: true },
+  })
+  if (!instance) {
+    throw new InstanceError('Instância não encontrada', 'NOT_FOUND')
+  }
+
+  return createNumber({
+    instanceId: instance.id,
+    provider: input.provider,
+    label: input.label,
+    priority: input.priority,
+  })
+}
+
+// Registra a URL de webhook inbound POR NÚMERO no provider (best-effort).
+// A URL aponta para o identificador do número (.../number/:numberId), de forma
+// ADITIVA ao caminho por instância. Não lança: falha aqui não bloqueia o connect.
+export async function registerNumberInboundWebhook(
+  number: InstanceNumber,
+  log: FastifyBaseLogger,
+): Promise<void> {
+  try {
+    // O segredo é o da Instance PAI (InstanceNumber não tem um próprio) —
+    // ver comentário de Instance.webhookSecret no schema.
+    const parent = await prisma.instance.findUnique({
+      where: { id: number.instanceId },
+      select: { webhookSecret: true },
+    })
+    const provider = providers[number.provider]
+    const providerInstanceId = number.providerInstanceId ?? `num-${number.id}`
+    const url = `${config.app.publicBaseUrl}/v1/webhooks/inbound/${number.provider.toLowerCase()}/number/${number.id}?ws=${parent ? decryptSecretIfNeeded(parent.webhookSecret) : ''}`
+    await provider.setWebhook(providerInstanceId, url)
+    log.info(`[Numbers] webhook inbound registrado (${number.provider}): ${url}`)
+  } catch (err: any) {
+    log.warn(`[Numbers] setWebhook falhou (${number.provider}, best-effort): ${err.message}`)
+  }
+}
+
+// Cria a sessão no provider na 1ª vez (persistindo providerInstanceId) e renova
+// o QR via connect(). Espelha refreshQr() mas escreve no InstanceNumber.
+// Lança em caso de erro do provider.
+export async function refreshQrNumber(number: InstanceNumber): Promise<InstanceNumber> {
+  const provider = providers[number.provider]
+  let providerInstanceId = number.providerInstanceId
+  let qrCode: string | undefined
+
+  if (!providerInstanceId) {
+    // 1ª conexão: cria a sessão no provider e persiste o providerInstanceId
+    const created = await provider.createInstance(`num-${number.id}`)
+    providerInstanceId = created.instanceId
+    qrCode = created.qrCode
+  } else {
+    // Já existe no provider: reconecta para obter o QR atual (sem recriar).
+    // Auto-recuperação: se a sessão sumiu no provider (404 — ex.: deletada
+    // manualmente ou perdida), recria com o mesmo nome em vez de falhar.
+    try {
+      const result = await provider.connect(providerInstanceId)
+      qrCode = result.qrCode
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        const created = await provider.createInstance(providerInstanceId)
+        providerInstanceId = created.instanceId
+        qrCode = created.qrCode
+      } else {
+        throw err
+      }
+    }
+  }
+
+  // O QR da Evolution v2 chega de forma assíncrona via webhook (QRCODE_UPDATED).
+  // Aqui o provider pode devolver vazio: nesse caso NÃO sobrescrevemos o qrCode
+  // já persistido (evita "apagar" um QR válido). O TTL só é renovado quando há
+  // QR novo vindo do provider.
+  return prisma.instanceNumber.update({
+    where: { id: number.id },
+    data: {
+      providerInstanceId,
+      qrCode: qrCode ?? number.qrCode,
+      ...(qrCode ? { qrExpiresAt: new Date(Date.now() + QR_TTL_SECONDS * 1000) } : {}),
+      connectionState: 'QR_PENDING',
+    },
+  })
+}
+
+// Conecta o número: Cloud API vira CONNECTED; demais geram/renova QR.
+// Espelha connectInstance() escrevendo no InstanceNumber. Registra o webhook
+// inbound por número (best-effort). Lança em caso de erro do provider.
+export async function connectNumber(
+  number: InstanceNumber,
+  log: FastifyBaseLogger,
+): Promise<ConnectResult> {
+  if (number.provider === 'CLOUD_API') {
+    const updated = await prisma.instanceNumber.update({
+      where: { id: number.id },
+      data: { connectionState: 'CONNECTED', qrCode: null, qrExpiresAt: null },
+    })
+    return {
+      instanceId: updated.providerInstanceId,
+      qrCode: null,
+      qrExpiresAt: null,
+      connectionState: updated.connectionState,
+    }
+  }
+
+  // Webhook registrado ANTES e DEPOIS de criar/renovar a sessão, pois os providers
+  // diferem:
+  //  - Evolution: a sessão `num-<id>` só existe APÓS refreshQrNumber; antes dela o
+  //    setWebhook retorna 404 (best-effort, sem efeito). A 2ª chamada (com a sessão
+  //    já criada) é a que efetivamente registra o webhook para o QRCODE_UPDATED.
+  // registerNumberInboundWebhook é best-effort (não lança), então a chamada redundante
+  // é segura.
+  await registerNumberInboundWebhook(number, log)
+  const updated = await refreshQrNumber(number)
+  await registerNumberInboundWebhook(updated, log)
+  return {
+    instanceId: updated.providerInstanceId,
+    qrCode: updated.qrCode,
+    qrExpiresAt: updated.qrExpiresAt,
+    connectionState: updated.connectionState,
+  }
+}
+
+// Consulta o status no provider e persiste o connectionState mapeado no número.
+// Espelha syncInstanceStatus(). Lança em caso de erro do provider.
+export async function syncNumberStatus(
+  number: InstanceNumber,
+): Promise<InstanceNumber['connectionState']> {
+  const provider = providers[number.provider]
+  const providerStatus = await provider.getInstanceStatus(number.providerInstanceId ?? 'default')
+  const connectionState = mapConnectionState(providerStatus, number.connectionState)
+  await prisma.instanceNumber.update({
+    where: { id: number.id },
+    data: { connectionState },
+  })
+
+  // Observabilidade: alerta de QUEDA. Dispara um webhook (tenant-scoped) só na
+  // TRANSIÇÃO CONNECTED → não-conectado (evita ruído de estados repetidos).
+  // Best-effort: nunca quebra a sincronização de status.
+  if (number.connectionState === 'CONNECTED' && connectionState !== 'CONNECTED') {
+    try {
+      const inst = await prisma.instance.findUnique({
+        where: { id: number.instanceId },
+        select: { apiClientId: true },
+      })
+      if (inst) {
+        await dispatchWebhook(
+          'NUMBER_DISCONNECTED',
+          {
+            instanceId: number.instanceId,
+            numberId: number.id,
+            phone: number.phone,
+            label: number.label,
+            provider: number.provider,
+            connectionState,
+          },
+          inst.apiClientId,
+        )
+      }
+    } catch {
+      // alerta é best-effort — não bloqueia a sincronização
+    }
+  }
+
+  return connectionState
+}
+
+// Remove um número do pool (escopado por tenant). Best-effort no provider:
+// tenta deleteInstance(providerInstanceId) e segue mesmo em caso de falha.
+// Retorna false se o número não for do tenant (404 no caller).
+export async function deleteNumber(
+  numberId: string,
+  apiClientId: string,
+  log?: FastifyBaseLogger,
+): Promise<boolean> {
+  const number = await findNumberScoped(numberId, apiClientId)
+  if (!number) return false
+
+  if (number.providerInstanceId) {
+    try {
+      await providers[number.provider].deleteInstance(number.providerInstanceId)
+    } catch (err: any) {
+      log?.warn(`[Numbers] Falha ao remover número no provider (best-effort): ${err.message}`)
+    }
+  }
+
+  await prisma.instanceNumber.delete({ where: { id: number.id } })
+  return true
+}
+
+// Consulta o status no provider e persiste o connectionState mapeado.
+// Lança em caso de erro do provider (caller decide o status HTTP).
+export async function syncInstanceStatus(
+  instance: Instance,
+): Promise<Instance['connectionState']> {
+  const provider = providers[instance.provider]
+  const providerStatus = await provider.getInstanceStatus(instance.instanceId ?? 'default')
+  const connectionState = mapConnectionState(providerStatus, instance.connectionState)
+  await prisma.instance.update({
+    where: { id: instance.id },
+    data: { connectionState },
+  })
+  return connectionState
+}

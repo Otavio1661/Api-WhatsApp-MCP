@@ -1,0 +1,74 @@
+{
+  "name": "api-whatsapp-mcp",
+  "version": "0.1.0",
+  "description": "Multi-tenant WhatsApp sending API with multi-provider fallback, anti-flood protection and a remote MCP server.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Otavio1661/Api-WhatsApp-MCP.git"
+  },
+  "keywords": [
+    "whatsapp",
+    "api",
+    "mcp",
+    "fastify",
+    "prisma",
+    "multi-tenant",
+    "evolution-api",
+    "wuzapi"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate",
+    "db:studio": "prisma studio",
+    "db:seed": "tsx prisma/seed.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:cov": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@fastify/compress": "^9.2.0",
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/cors": "^11.3.0",
+    "@fastify/formbody": "^8.0.2",
+    "@fastify/helmet": "^13.1.1",
+    "@fastify/jwt": "^9.1.0",
+    "@fastify/rate-limit": "^11.2.0",
+    "@fastify/static": "^10.1.4",
+    "@fastify/view": "^12.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "@prisma/client": "^5.22.0",
+    "@types/bcryptjs": "^2.4.6",
+    "axios": "^1.7.7",
+    "bcryptjs": "^3.0.3",
+    "bullmq": "^5.17.0",
+    "dayjs": "^1.11.13",
+    "dotenv": "^16.4.5",
+    "eta": "^4.6.0",
+    "fastify": "^5.12.5",
+    "ioredis": "^5.4.1",
+    "pino": "^9.4.0",
+    "pino-pretty": "^11.3.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "@vitest/coverage-v8": "^2.1.9",
+    "prisma": "^5.22.0",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.9"
+  },
+  "overrides": {
+    "@fastify/jwt": {
+      "fast-jwt": "^6.3.3"
+    }
+  }
+}

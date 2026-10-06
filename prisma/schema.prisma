@@ -1,0 +1,521 @@
+// ApiEnvios - database schema
+// PostgreSQL via Prisma ORM
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Optional direct connection used by migrations (migrate deploy/dev/resolve).
+  // Set DIRECT_DATABASE_URL when "url" goes through a transaction-mode pooler
+  // (e.g. PgBouncer), which does not support the prepared statements the
+  // Prisma schema engine uses. Without a pooler, point both to the same database.
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// INSTÂNCIAS WHATSAPP (entidade central — uma por número/sessão de provider)
+// ─────────────────────────────────────────────
+model Instance {
+  id         String       @id @default(cuid())
+  name       String? // nome amigável (apelido), único por tenant — ex: "Vendas-SP"
+  slug       String?      @unique // slug único GLOBAL para uso na URL/API — ex: "vendas-sp"
+  phone      String? // ex: "5544999990000" — null até conectar via QR
+  label      String? // e.g. "Main number"
+  provider   Provider // EVOLUTION | WUZAPI | CLOUD_API
+  instanceId String? // ID da instância no provider
+  status     NumberStatus @default(ACTIVE)
+  priority   Int          @default(0) // menor = maior prioridade no fallback
+
+  // Send token. Stored ENCRYPTED at rest (AES-256-GCM, see
+  // src/utils/secrets-crypto.ts). Generated in application code so it can be
+  // encrypted and hashed BEFORE the INSERT; there is no database default.
+  token String @unique
+
+  // Blind index (HMAC-SHA256 of the plaintext) used to look the token up in the
+  // auth middleware: `token` is encrypted with a random IV, so it cannot be
+  // queried directly.
+  tokenHash String? @unique
+
+  // Secret that authenticates INBOUND provider callbacks (a different purpose
+  // from `token`, which authorizes sending). Embedded as a query parameter in
+  // the URL registered at the provider and checked with a timing-safe compare.
+  // Also encrypted at rest.
+  webhookSecret String @unique
+
+  // Estado de conexão (autenticação/QR — separado do ciclo de vida em `status`)
+  connectionState InstanceConnState @default(DISCONNECTED)
+  qrCode          String?
+  qrExpiresAt     DateTime?
+
+  // Vínculo com o tenant dono da instância
+  apiClientId String
+  apiClient   ApiClient @relation(fields: [apiClientId], references: [id])
+
+  // Dono (usuário humano) da instância. MEMBER só enxerga as suas; OWNER vê todas
+  // as da conta e pode (re)atribuir. null = instância de nível de conta (sem dono).
+  // SetNull: apagar o usuário não apaga a instância — ela apenas fica sem dono.
+  ownerUserId String?
+  owner       User?   @relation("InstanceOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+
+  // Métricas anti-ban
+  sentToday   Int       @default(0)
+  sentTotal   Int       @default(0)
+  lastSentAt  DateTime?
+  lastResetAt DateTime  @default(now()) // reset do contador diário
+
+  // Ban tracking
+  bannedAt    DateTime?
+  banReason   String?
+  bannedCount Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages  Message[]
+  rotations NumberRotation[]
+  numbers   InstanceNumber[] // Fase C1: pool de números filhos (aditivo; lógica ainda usa os campos acima)
+  campaigns Campaign[] // lotes que tiveram esta instância como alvo
+
+  @@unique([apiClientId, phone])
+  @@unique([apiClientId, name]) // apelido único por tenant (NULLs distintos no Postgres)
+  @@index([status, priority])
+  @@index([provider])
+  @@index([apiClientId, status])
+  @@index([ownerUserId])
+}
+
+// ─────────────────────────────────────────────
+// NÚMEROS DA INSTÂNCIA (Fase C1 — Instância como pool de números)
+// Cada InstanceNumber é um número/sessão de provider sob uma Instance.
+// ADITIVO: nesta fase os campos espelham os da Instance; o roteamento/QR/envio
+// continua usando a Instance. C2/C3/C4 movem a lógica e removem os legados.
+// ─────────────────────────────────────────────
+model InstanceNumber {
+  id String @id @default(cuid())
+
+  instanceId String
+  instance   Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  provider           Provider
+  providerInstanceId String? // ID da sessão no provider (= Instance.instanceId)
+  phone              String?
+  label              String?
+  status             NumberStatus @default(ACTIVE)
+  priority           Int          @default(0)
+
+  // Estado de conexão (autenticação/QR)
+  connectionState InstanceConnState @default(DISCONNECTED)
+  qrCode          String?
+  qrExpiresAt     DateTime?
+
+  // Métricas anti-ban
+  sentToday   Int       @default(0)
+  sentTotal   Int       @default(0)
+  lastSentAt  DateTime?
+  lastResetAt DateTime  @default(now())
+
+  // Ban tracking
+  bannedAt    DateTime?
+  banReason   String?
+  bannedCount Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Fase C3: o número passa a ser o alvo real do envio/rotação (aditivo).
+  messages  Message[]
+  rotations NumberRotation[]
+
+  @@unique([instanceId, phone])
+  @@index([instanceId])
+  @@index([status, priority])
+}
+
+// ─────────────────────────────────────────────
+// MENSAGENS ENVIADAS
+// ─────────────────────────────────────────────
+model Message {
+  id         String  @id @default(cuid())
+  externalId String? // ID gerado pelo sistema cliente (idempotência por tenant)
+
+  // Tenant dono da mensagem
+  apiClientId String
+  apiClient   ApiClient @relation(fields: [apiClientId], references: [id])
+
+  // Destinatário
+  toPhone String // ex: "5544988880000"
+
+  // Conteúdo
+  type     MessageType @default(TEXT)
+  content  String // texto, URL da mídia/figurinha, nome do local/contato, ou pergunta da enquete
+  caption  String? // legenda para mídias
+  // Interativo (type=BUTTONS): { footer?, buttons: [{displayText, type, url?, phoneNumber?}] }
+  buttons  Json?
+  // Localização (type=LOCATION): { latitude, longitude }. `content` guarda o nome do local.
+  location Json?
+  // Contato/vCard (type=CONTACT): { phone }. `content` guarda o nome do contato.
+  contact  Json?
+  // Enquete (type=POLL): { options: string[] }. `content` guarda a pergunta.
+  poll     Json?
+  // Lista interativa (type=LIST): { buttonText, title?, footer?, sections: [{title, rows: [{title, description?, rowId}]}] }.
+  // `content` guarda o corpo da mensagem.
+  list     Json?
+
+  // Roteamento
+  providerId      String? // ID no provider (ex: message id do Evolution)
+  instanceId      String?
+  instance        Instance?       @relation(fields: [instanceId], references: [id])
+  // Fase C3: número do pool (InstanceNumber) que efetivou o envio. Aditivo/nullable.
+  numberId        String?
+  number          InstanceNumber? @relation(fields: [numberId], references: [id], onDelete: SetNull)
+  provider        Provider?
+  providerAttempt Int             @default(1) // attempt number (1 = first provider tried, 2 = fallback, ...)
+
+  // Lote (campanha) ao qual a mensagem pertence (envio em massa). Nullable.
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  // Usuário humano que disparou (login JWT). null = envio por API key/token (máquina).
+  createdByUserId String?
+  createdByUser   User?   @relation("MessageSender", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  // Status
+  status       MessageStatus @default(QUEUED)
+  errorMessage String?
+  retryCount   Int           @default(0)
+  maxRetries   Int           @default(3)
+
+  // Timestamps
+  scheduledAt DateTime? // para envio agendado
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+  failedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attempts MessageAttempt[]
+
+  @@unique([apiClientId, externalId])
+  @@index([status])
+  @@index([toPhone])
+  @@index([createdAt])
+  @@index([scheduledAt])
+  @@index([apiClientId, createdAt])
+  @@index([instanceId])
+  @@index([numberId])
+  @@index([campaignId])
+  @@index([createdByUserId])
+}
+
+// ─────────────────────────────────────────────
+// MENSAGENS RECEBIDAS (inbound) — cliente respondendo no WhatsApp.
+// Persistida pra consulta via API/MCP (polling), além do webhook
+// MESSAGE_RECEIVED já disparado em tempo real (dispatchWebhook em
+// webhooks.route.ts) pra quem tiver um endpoint próprio configurado.
+// Sem @relation formal de propósito — é só um REGISTRO de leitura, não
+// participa de nenhuma regra de negócio/cascade (mesmo padrão do AuditLog).
+// ─────────────────────────────────────────────
+model InboundMessage {
+  id String @id @default(cuid())
+
+  apiClientId String
+  instanceId  String
+  numberId    String?
+
+  from              String // telefone de quem enviou
+  fromLid           String? // identificador interno do WhatsApp (LID), quando disponível
+  fromMe            Boolean @default(false) // eco da própria sessão — não é mensagem de cliente de verdade
+  text              String?
+  buttonText        String? // clique em botão interativo
+  listRowId         String?
+  listTitle         String?
+  providerMessageId String?
+  mediaType         String? // audio | image | sticker | video | document — null = só texto
+  mimetype          String?
+
+  createdAt DateTime @default(now())
+
+  @@index([apiClientId, createdAt])
+  @@index([instanceId])
+}
+
+// ─────────────────────────────────────────────
+// CAMPANHAS (lotes de envio em massa) — Message.campaignId aponta para cá.
+// ─────────────────────────────────────────────
+model Campaign {
+  id   String  @id @default(cuid())
+  name String? // rótulo opcional do lote
+
+  apiClientId String
+  apiClient   ApiClient @relation(fields: [apiClientId], references: [id])
+
+  // Instância alvo (opcional). SetNull: apagar a instância não apaga o lote.
+  instanceId String?
+  instance   Instance? @relation(fields: [instanceId], references: [id], onDelete: SetNull)
+
+  createdByUserId String? // usuário humano que disparou (informativo)
+  total           Int     @default(0) // nº de mensagens enfileiradas no lote
+
+  createdAt DateTime @default(now())
+
+  messages Message[]
+
+  @@index([apiClientId, createdAt])
+}
+
+// ─────────────────────────────────────────────
+// TENTATIVAS DE ENVIO (histórico de fallback)
+// ─────────────────────────────────────────────
+model MessageAttempt {
+  id        String  @id @default(cuid())
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id])
+
+  provider   Provider
+  instanceId String?
+  attempt    Int // 1, 2, 3...
+  success    Boolean
+  errorCode  String?
+  errorMsg   String?
+  duration   Int? // ms
+
+  createdAt DateTime @default(now())
+
+  @@index([messageId])
+}
+
+// ─────────────────────────────────────────────
+// ROTAÇÃO DE NÚMEROS
+// ─────────────────────────────────────────────
+model NumberRotation {
+  id         String   @id @default(cuid())
+  instanceId String
+  instance   Instance @relation(fields: [instanceId], references: [id])
+
+  // Fase C3: rotação por NÚMERO do pool (aditivo/nullable). Mantém instanceId
+  // (compat) e referencia o InstanceNumber banido quando aplicável.
+  numberId String?
+  number   InstanceNumber? @relation(fields: [numberId], references: [id], onDelete: SetNull)
+
+  reason      RotationReason // BAN | LIMIT_REACHED | MANUAL | SCHEDULED
+  triggeredBy String? // "auto" | "webhook" | userId
+
+  createdAt DateTime @default(now())
+
+  @@index([instanceId])
+  @@index([numberId])
+}
+
+// ─────────────────────────────────────────────
+// CLIENTES DA API (sistemas que consomem a API)
+// ─────────────────────────────────────────────
+model ApiClient {
+  id     String  @id @default(cuid())
+  name   String
+  // Stored ENCRYPTED at rest (AES-256-GCM, see src/utils/secrets-crypto.ts),
+  // generated in application code (never by a database default).
+  apiKey String  @unique
+  // Blind index (HMAC-SHA256) used to look the API key up in the auth middleware.
+  apiKeyHash String? @unique
+  active Boolean @default(true)
+
+  // Papel do tenant
+  role ClientRole @default(CLIENT) // ADMIN | CLIENT
+
+  // Fallback opt-in entre as instâncias do próprio tenant (+ Cloud API)
+  fallbackEnabled Boolean @default(false)
+
+  // Rate limiting por cliente
+  rateLimit Int @default(100) // req/min
+
+  // Teto de mensagens para o MESMO número de destino por hora (anti-flood/spam),
+  // contado por conta somando todas as instâncias. 0 = ilimitado. Editável pelo super admin.
+  maxPerRecipientPerHour Int @default(10)
+
+  // Quota de instâncias (pools) que a conta pode criar. SUPER_ADMIN ignora.
+  maxInstances Int @default(1)
+
+  // Métricas
+  totalSent Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  instances Instance[]
+  messages  Message[]
+  webhooks  Webhook[]
+  users     User[]
+  campaigns Campaign[]
+}
+
+// ─────────────────────────────────────────────
+// USUÁRIOS HUMANOS (login JWT — criados SOMENTE pelo admin)
+// ─────────────────────────────────────────────
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  name          String?
+  role          UserRole @default(OWNER) // papel DENTRO da conta
+  emailVerified Boolean  @default(false)
+
+  // Optional identifier from an external identity provider (see
+  // src/services/external-auth.ts). Null for ordinary local accounts.
+  externalId String? @unique
+
+  // Conta (tenant) à qual o usuário pertence
+  apiClientId String
+  apiClient   ApiClient @relation(fields: [apiClientId], references: [id])
+
+  // Instâncias das quais este usuário é dono (escopo do MEMBER).
+  ownedInstances Instance[] @relation("InstanceOwner")
+
+  // Mensagens que este usuário disparou (para auditoria/monitor).
+  sentMessages Message[] @relation("MessageSender")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([apiClientId])
+}
+
+// ─────────────────────────────────────────────
+// WEBHOOKS DE NOTIFICAÇÃO
+// ─────────────────────────────────────────────
+model Webhook {
+  id     String   @id @default(cuid())
+  url    String
+  events String[] // ["BAN_DETECTED", "MESSAGE_FAILED", "NUMBER_ROTATED"]
+  active Boolean  @default(true)
+  secret String? // para validação HMAC
+
+  // Tenant dono do webhook (null = webhook global do admin)
+  apiClientId String?
+  apiClient   ApiClient? @relation(fields: [apiClientId], references: [id])
+
+  // Histórico de entregas
+  lastCalledAt DateTime?
+  failCount    Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([apiClientId])
+}
+
+// ─────────────────────────────────────────────
+// AUDIT LOG (destructive super-admin actions)
+// ─────────────────────────────────────────────
+// Registro estruturado e durável de quem apagou o quê, quando, e o que foi
+// perdido. Gravado na MESMA transação Prisma da deleção (ver cascade-delete.
+// service.ts e provisioning.service.ts) — nunca como escrita best-effort à
+// parte, que poderia falhar de forma inconsistente com a própria deleção.
+//
+// Sem @relation para ApiClient/Instance/User de propósito: a entidade
+// referenciada é APAGADA na mesma transação que grava este registro, então
+// uma FK de verdade não sobreviveria (e o objetivo aqui é justamente
+// sobreviver à entidade). entityId fica como texto solto, correlacionável
+// manualmente por entityType+entityId.
+model AuditLog {
+  id String @id @default(cuid())
+
+  // Quem executou a ação. actorId é o ApiClient.id (chave da conta ADMIN,
+  // acesso "de máquina") OU o User.id (login humano SUPER_ADMIN via JWT) —
+  // sem FK, mesmo motivo do entityId abaixo. actorLabel guarda e-mail/nome
+  // pra leitura humana do log sem precisar cruzar com uma tabela que já
+  // pode nem ter mais a linha.
+  actorType  String // "API_KEY" | "USER"
+  actorId    String
+  actorLabel String?
+
+  // Ação realizada, ex.: "DELETE_CLIENT_CASCADE" | "DELETE_INSTANCE_CASCADE" | "DELETE_USER"
+  action String
+
+  entityType String // "ApiClient" | "Instance" | "User"
+  entityId   String
+
+  // Retrato mínimo do que foi perdido. NUNCA inclui segredo (sem apiKey,
+  // passwordHash, token, webhookSecret) — só o suficiente para
+  // identificar/reconstituir manualmente o que existia.
+  snapshot Json
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+enum Provider {
+  EVOLUTION // Evolution API (principal)
+  WUZAPI // WuzAPI (Go/whatsmeow) - suporta botões interativos
+  CLOUD_API // WhatsApp Cloud API oficial - fallback pago
+}
+
+enum NumberStatus {
+  ACTIVE // funcionando
+  WARMING // em warm-up (número novo, enviando menos)
+  BANNED // banido pelo WhatsApp
+  SUSPENDED // suspenso manualmente
+  RETIRED // aposentado / substituído
+}
+
+enum ClientRole {
+  ADMIN // gerencia contas e instâncias de todos
+  CLIENT // tenant comum
+}
+
+enum UserRole {
+  OWNER // dono da conta — exibido como "Admin" no painel
+  MEMBER // membro convidado da conta — exibido como "Usuário"
+  SUPER_ADMIN // staff da plataforma: controle global de todas as contas
+}
+
+enum InstanceConnState {
+  DISCONNECTED // sem sessão ativa
+  QR_PENDING // aguardando leitura do QR
+  CONNECTED // sessão autenticada
+  BANNED // sessão banida pelo WhatsApp
+}
+
+enum MessageStatus {
+  QUEUED // na fila
+  SENDING // sendo enviado
+  SENT // enviado ao provider
+  DELIVERED // entregue ao destinatário
+  READ // lido
+  FAILED // falhou em todos os providers
+  SCHEDULED // agendado para envio futuro
+  CANCELLED // cancelado
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  STICKER
+  BUTTONS // mensagem interativa com botões (só via WuzAPI)
+  LOCATION // pin de localização (só via WuzAPI)
+  CONTACT // cartão de contato / vCard (só via WuzAPI)
+  POLL // enquete com opções de resposta (só via WuzAPI)
+  LIST // menu de lista interativa, mais de 3 opções (só via WuzAPI)
+}
+
+enum RotationReason {
+  BAN
+  LIMIT_REACHED
+  MANUAL
+  SCHEDULED
+  ERROR_RATE
+}

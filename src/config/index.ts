@@ -1,0 +1,162 @@
+// src/config/index.ts
+import 'dotenv/config'
+
+function requireEnv(key: string): string {
+  const value = process.env[key]
+  if (!value) throw new Error(`Variável de ambiente obrigatória não definida: ${key}`)
+  return value
+}
+
+export const config = {
+  app: {
+    env: process.env.NODE_ENV ?? 'development',
+    port: Number(process.env.PORT ?? 3000),
+    apiSecret: process.env.API_SECRET ?? 'dev-secret-change-me',
+    isDev: (process.env.NODE_ENV ?? 'development') === 'development',
+    // URL base pública usada para montar apiUrl das instâncias e URLs de webhook
+    publicBaseUrl: process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000',
+    // URL pública da API (externa) — usada só para exibir exemplos na documentação.
+    // Em dev/Docker o publicBaseUrl é interno (app:3002); aqui é o domínio externo.
+    apiPublicUrl: process.env.PUBLIC_API_URL ?? process.env.PUBLIC_BASE_URL ?? 'http://localhost:3002',
+    // Origem pública do painel /admin — só existe pra restringir o CORS da API
+    // exatamente a esse domínio (ver server.ts). Painel e API vivem em
+    // subdomínios diferentes (panel.example.com / api.example.com), então
+    // o playground "Testar recursos" do painel É uma chamada cross-origin de
+    // navegador de verdade, não server-a-servidor.
+    panelPublicUrl: process.env.PUBLIC_PANEL_URL ?? 'http://localhost:3000',
+    // Teto de requisições/minuto para clientes sem rateLimit próprio definido
+    defaultRateLimit: Number(process.env.DEFAULT_RATE_LIMIT ?? 100),
+    // JWT para login humano (usuários gerenciam as próprias instâncias)
+    jwtSecret: process.env.JWT_SECRET ?? 'dev-jwt-secret-change-me',
+    jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '7d',
+    // Teto absoluto de defesa em profundidade. Quem realmente expira por
+    // inatividade é o registro em Redis (ver session-activity.service.ts) —
+    // este valor só limita o pior caso se o Redis falhar de algum jeito.
+    sessionIdleTimeoutMin: Number(process.env.SESSION_IDLE_TIMEOUT_MIN ?? 30),
+  },
+
+  db: {
+    url: requireEnv('DATABASE_URL'),
+  },
+
+  redis: {
+    host: process.env.REDIS_HOST ?? 'localhost',
+    port: Number(process.env.REDIS_PORT ?? 6379),
+    password: process.env.REDIS_PASSWORD ?? undefined,
+  },
+
+  // Transcrição de áudio do bridge (opcional; vazio = áudio sem transcrição).
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY ?? '',
+    model: process.env.GEMINI_MODEL ?? 'gemini-flash-lite-latest',
+    enabled: Boolean(process.env.GEMINI_API_KEY),
+  },
+
+  providers: {
+    evolution: {
+      url: process.env.EVOLUTION_API_URL ?? 'http://localhost:8080',
+      apiKey: process.env.EVOLUTION_API_KEY ?? '',
+      enabled: Boolean(process.env.EVOLUTION_API_KEY),
+    },
+    wuzapi: {
+      url: process.env.WUZAPI_URL ?? 'http://localhost:8888',
+      // Token de admin — usado só pra provisionar/apagar usuários (sessões).
+      // As operações de envio/QR usam o token do próprio usuário (guardado em
+      // Instance.instanceId), não este.
+      adminToken: process.env.WUZAPI_ADMIN_TOKEN ?? '',
+      enabled: Boolean(process.env.WUZAPI_URL),
+    },
+    cloudApi: {
+      token: process.env.WA_CLOUD_TOKEN ?? '',
+      phoneNumberId: process.env.WA_CLOUD_PHONE_NUMBER_ID ?? '',
+      enabled: Boolean(process.env.WA_CLOUD_TOKEN),
+    },
+  },
+
+  // Ordem de fallback dos providers (índice 0 = primeiro a tentar)
+  providerFallbackOrder: ['EVOLUTION', 'WUZAPI', 'CLOUD_API'] as const,
+
+  sending: {
+    delayMin: Number(process.env.SEND_DELAY_MIN ?? 2000),
+    delayMax: Number(process.env.SEND_DELAY_MAX ?? 5000),
+    maxMessagesPerNumberDay: Number(process.env.MAX_MESSAGES_PER_NUMBER_DAY ?? 200),
+    // Teto de mensagens em processamento SIMULTÂNEO, POR RAIA da fila de envio
+    // (ver queueLanes abaixo) — não confundir com o delay acima (que é POR
+    // NÚMERO, via acquireInstanceSlot). Default 5 preserva o comportamento de
+    // hoje; achado real (teste de carga, 2026-08-18): com muitos números
+    // ativos, um valor baixo aqui vira gargalo artificial — um número com
+    // fila cheia atrasa os outros mesmo eles tendo capacidade de enviar em
+    // paralelo.
+    workerConcurrency: Number(process.env.SEND_WORKER_CONCURRENCY ?? 5),
+    // Nº de filas ("raias") em que o envio é dividido — cada instância cai
+    // sempre na mesma raia (hash do id), então um número com muita mensagem
+    // só compete por vaga com quem mais caiu NA MESMA raia, não com a conta
+    // inteira. Observed in load tests: mesmo com
+    // concorrência alta, fila única ainda deixava um número quieto esperar
+    // atrás do backlog de outro (ordem de chegada FIFO).
+    queueLanes: Number(process.env.SEND_QUEUE_LANES ?? 1),
+  },
+
+  notifications: {
+    banWebhookUrl: process.env.BAN_WEBHOOK_URL ?? '',
+    alertEmail: process.env.ALERT_EMAIL ?? '',
+  },
+
+  // Rate limit de login (3 camadas — ver login-rate-limit.service.ts):
+  // conta = IP+email (mira numa conta específica); ip = IP sozinho (todas as contas,
+  // credential stuffing); dispositivo = cookie de dispositivo, sem IP (atacante
+  // trocando de IP). Qualquer camada estourando bloqueia a tentativa.
+  loginThrottle: {
+    conta: {
+      maxTentativas: Number(process.env.LOGIN_MAX_TENTATIVAS_CONTA ?? 5),
+      janelaMin: Number(process.env.LOGIN_JANELA_CONTA_MIN ?? 15),
+    },
+    ip: {
+      maxTentativas: Number(process.env.LOGIN_MAX_TENTATIVAS_IP ?? 20),
+      janelaMin: Number(process.env.LOGIN_JANELA_IP_MIN ?? 15),
+    },
+    dispositivo: {
+      maxTentativas: Number(process.env.LOGIN_MAX_TENTATIVAS_DISPOSITIVO ?? 20),
+      janelaMin: Number(process.env.LOGIN_JANELA_DISPOSITIVO_MIN ?? 15),
+    },
+    // IPs que nunca são bloqueados (ex.: escritório/VPN do próprio dono), separados por vírgula.
+    ipAllowlist: (process.env.LOGIN_IP_ALLOWLIST ?? '')
+      .split(',')
+      .map((ip) => ip.trim())
+      .filter(Boolean),
+  },
+
+  // Admin inicial do painel, provisionado pelo seed a partir do ambiente.
+  // Sem valores default para email/senha: vazio = criação do admin desativada
+  // (o seed roda normalmente, apenas pula a etapa). NUNCA hardcode credenciais.
+  adminSeed: adminSeedConfig(),
+} as const
+
+// Lê as variáveis ADMIN_SEED já com .trim() — valores só com espaços contam como
+// vazios. enabled deriva dos valores trimados (email e senha ambos preenchidos).
+function adminSeedConfig() {
+  const email = (process.env.ADMIN_SEED_EMAIL ?? '').trim()
+  const password = (process.env.ADMIN_SEED_PASSWORD ?? '').trim()
+  const name = (process.env.ADMIN_SEED_NAME ?? '').trim() || 'Administrador'
+  return {
+    email,
+    password,
+    name,
+    // Habilitado apenas quando email e senha estão ambos preenchidos (já trimados).
+    enabled: Boolean(email && password),
+  }
+}
+
+// Guard de produção: nunca subir com segredos no valor dev (risco de forja de token/auth).
+if (!config.app.isDev) {
+  const insecure: string[] = []
+  // Also reject the placeholder values shipped in .env.example.
+  const isPlaceholder = (v: string) => v.startsWith('change-me') || v.length < 16
+  if (config.app.jwtSecret === 'dev-jwt-secret-change-me' || isPlaceholder(config.app.jwtSecret)) insecure.push('JWT_SECRET')
+  if (config.app.apiSecret === 'dev-secret-change-me' || isPlaceholder(config.app.apiSecret)) insecure.push('API_SECRET')
+  if (insecure.length > 0) {
+    throw new Error(
+      `Segredos inseguros em produção (defina no ambiente): ${insecure.join(', ')}`,
+    )
+  }
+}

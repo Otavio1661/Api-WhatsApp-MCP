@@ -1,0 +1,84 @@
+<% const atLimit = !it.isSuperAdmin && it.instances.length >= it.account.maxInstances; %>
+<div class="page-head">
+  <div>
+    <h1>Instâncias</h1>
+    <p class="subtitle">Conta: <strong><%= it.account.name %></strong> · cada instância é um pool de números do WhatsApp.</p>
+  </div>
+  <form method="POST" action="/admin/instances" class="add-form" x-data="{ open: false }">
+    <button type="button" class="btn btn-primary" @click="open = !open" <% if (atLimit) { %>disabled title="Limite de instâncias da conta atingido"<% } %>>+ Adicionar instância</button>
+    <div class="add-fields" x-show="open" x-cloak>
+      <input type="text" name="name" placeholder="Nome (ex: Vendas-SP)" />
+      <input type="text" name="slug" placeholder="Slug (ex: vendas-sp)" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" />
+      <select name="provider">
+        <option value="EVOLUTION">Evolution</option>
+        <option value="WUZAPI">WuzAPI (botões interativos)</option>
+        <option value="CLOUD_API">Cloud API</option>
+      </select>
+      <button type="submit" class="btn btn-primary">Criar</button>
+    </div>
+  </form>
+</div>
+
+<% if (it.pageOk) { %>
+  <div class="alert alert-ok"><%= it.pageOk %></div>
+<% } %>
+<% if (it.pageError) { %>
+  <div class="alert alert-error"><%= it.pageError %></div>
+<% } %>
+
+<div class="stat-row">
+  <div class="stat">
+    <div class="stat-num"><%= it.instances.length %><% if (!it.isSuperAdmin) { %> / <%= it.account.maxInstances %><% } %></div>
+    <div class="stat-label">Instâncias<% if (!it.isSuperAdmin) { %> (uso / quota)<% } else { %> (super admin: ilimitado)<% } %></div>
+  </div>
+  <div class="stat">
+    <div class="stat-num"><%= it.instances.filter(function(i){ return i.connection === 'CONNECTED' }).length %></div>
+    <div class="stat-label">Conectadas</div>
+  </div>
+</div>
+
+<% if (atLimit) { %>
+  <div class="alert alert-error">Você atingiu o limite de <strong><%= it.account.maxInstances %></strong> instância(s) desta conta. Para criar mais, peça ao super admin para aumentar a quota.</div>
+<% } %>
+
+<div class="card api-key-card" x-data="{ full: <%~ JSON.stringify(it.account.apiKey) %>, revealed: false, copied: false }">
+  <span class="muted">API key da conta</span>
+  <code class="token-cell" x-text="revealed ? full : apMaskSecret(full)"></code>
+  <button type="button" class="btn btn-ghost btn-sm" @click="revealed = !revealed" x-text="revealed ? 'Ocultar' : 'Mostrar'"></button>
+  <button type="button" class="btn btn-ghost btn-sm" @click="navigator.clipboard.writeText(full); copied = true; setTimeout(() => copied = false, 1500)" x-text="copied ? 'Copiado!' : 'Copiar'"></button>
+  <span class="muted" style="margin-left:auto">Use no header <code>x-api-key</code> das chamadas à API.</span>
+</div>
+
+<div class="card">
+  <table class="instances-table">
+    <thead>
+      <tr>
+        <th>Nome / Slug</th>
+        <th>Status de autenticação</th>
+        <th>API URL</th>
+        <th>ID da instância</th>
+        <th>Token</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <% if (it.instances.length === 0) { %>
+        <tr><td colspan="6" class="muted center">Nenhuma instância ainda. Crie a primeira acima.</td></tr>
+      <% } %>
+      <% it.instances.forEach(function(inst){ %>
+        <tr>
+          <td><strong><%= inst.name || '—' %></strong><br/><code><%= inst.slug || '—' %></code></td>
+          <td><span class="badge badge-<%= inst.connection %>"><%= inst.connection %></span></td>
+          <td><code><%= inst.apiUrl %></code></td>
+          <td><code><%= inst.id %></code></td>
+          <td x-data="{ full: <%~ JSON.stringify(inst.token) %>, revealed: false, copied: false }">
+            <code class="token-cell" x-text="revealed ? full : apMaskSecret(full)"></code>
+            <button type="button" class="btn btn-ghost btn-sm" @click="revealed = !revealed" x-text="revealed ? 'Ocultar' : 'Mostrar'"></button>
+            <button type="button" class="btn btn-ghost btn-sm" @click="navigator.clipboard.writeText(full); copied = true; setTimeout(() => copied = false, 1500)" x-text="copied ? 'Copiado!' : 'Copiar'"></button>
+          </td>
+          <td><a class="btn btn-ghost" href="/admin/instances/<%= inst.id %>">Abrir</a></td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
+</div>

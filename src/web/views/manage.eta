@@ -1,0 +1,85 @@
+<div class="page-head">
+  <div>
+    <h1>Administração</h1>
+    <p class="muted">Contas (tenants) e usuários da plataforma.</p>
+  </div>
+  <a href="/admin/manage/clients/new" class="btn btn-primary">+ Nova conta</a>
+</div>
+
+<% if (it.ok) { %>
+  <div class="alert alert-ok"><%= it.ok %></div>
+<% } %>
+<% if (it.err) { %>
+  <div class="alert alert-error"><%= it.err %></div>
+<% } %>
+
+<div class="tabs">
+  <a href="/admin/manage" class="tab active">Contas (<%= it.clientsTotal %>)</a>
+  <a href="/admin/manage/users" class="tab">Usuários</a>
+</div>
+
+<div class="card">
+  <table class="instances-table">
+    <thead>
+      <tr>
+        <th>Nome</th>
+        <th>Tipo</th>
+        <th>Ativa</th>
+        <th>Instâncias</th>
+        <th>Usuários</th>
+        <th>Enviadas</th>
+        <th>Ações</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% if (it.clients.length === 0) { %>
+        <tr><td colspan="7" class="muted center">Nenhuma conta ainda.</td></tr>
+      <% } %>
+      <% it.clients.forEach(function(c){ %>
+        <tr>
+          <td>
+            <a href="/admin/manage/clients/<%= c.id %>"><strong><%= c.name %></strong></a>
+            <br/><code class="muted"><%= c.id %></code>
+          </td>
+          <td><span class="badge badge-msg"><%= c.role %></span></td>
+          <td><%= c.active ? 'Sim' : 'Não' %></td>
+          <td><%= c._count.instances %> / <%= c.maxInstances %></td>
+          <td><%= c._count.users %></td>
+          <td><%= c.totalSent %></td>
+          <td style="display:flex;gap:4px;flex-wrap:wrap">
+            <a href="/admin/manage/clients/<%= c.id %>" class="btn btn-ghost btn-sm">Ver / editar</a>
+            <form method="POST" action="/admin/manage/clients/<%= c.id %>/toggle-active" class="inline" x-data
+                  data-confirm-msg="<%= `${c.active ? 'Desativar' : 'Ativar'} a conta "${c.name}"? ${c.active ? 'Isso bloqueia o login e a API deste cliente imediatamente.' : ''}` %>"
+                  @submit.prevent="if (confirm($el.dataset.confirmMsg)) $el.submit()">
+              <input type="hidden" name="returnTo" value="/admin/manage" />
+              <button type="submit" class="btn btn-ghost btn-sm"><%= c.active ? 'Desativar' : 'Ativar' %></button>
+            </form>
+            <% if (c.id !== it.currentClientId) { %>
+              <form method="POST" action="/admin/manage/clients/<%= c.id %>/delete" class="inline" x-data
+                    data-confirm-msg="<%= `APAGAR DEFINITIVAMENTE a conta "${c.name}" e TODOS os dados (instâncias, mensagens, usuários)? Esta ação é irreversível.` %>"
+                    @submit.prevent="if (confirm($el.dataset.confirmMsg)) $el.submit()">
+                <button type="submit" class="btn btn-ghost btn-sm btn-danger">Apagar</button>
+              </form>
+            <% } else { %>
+              <span class="muted">atual</span>
+            <% } %>
+          </td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
+  <% const clientsTotalPages = Math.max(1, Math.ceil(it.clientsTotal / it.clientsLimit)); %>
+  <% if (clientsTotalPages > 1) { %>
+  <div class="page-head" style="margin-top:12px">
+    <span class="muted">Página <%= it.clientsPage %> de <%= clientsTotalPages %></span>
+    <div style="display:flex;gap:8px">
+      <% if (it.clientsPage > 1) { %>
+        <a class="btn btn-ghost" href="/admin/manage?page=<%= it.clientsPage - 1 %>">← Anterior</a>
+      <% } %>
+      <% if (it.clientsPage < clientsTotalPages) { %>
+        <a class="btn btn-ghost" href="/admin/manage?page=<%= it.clientsPage + 1 %>">Próxima →</a>
+      <% } %>
+    </div>
+  </div>
+  <% } %>
+</div>
