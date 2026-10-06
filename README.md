@@ -219,7 +219,7 @@ correspondentes. Um usuário com `externalId` e sem provider registrado não con
 
 ```bash
 npm test          # vitest (unitários + integração com Prisma/Redis simulados; não precisa de infraestrutura)
-npm run build     # checagem de tipos + compilação
+npm run build     # compilação (tsc) + cópia das views e dos arquivos públicos do painel para dist/web
 npm run docs:mcp-tools:check   # falha se docs/mcp-tools.md estiver desatualizado (regenere com npm run docs:mcp-tools)
 ```
 
