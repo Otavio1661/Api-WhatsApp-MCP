@@ -34,7 +34,9 @@ files=$(git ls-files 2>/dev/null || find . -type f -not -path './node_modules/*'
 files=$(echo "$files" | sed 's#^\./##')
 # Findings are read with process substitution (not a pipe) so that bad() can set $fail in this shell.
 while read -r f; do bad "env file: $f"; done < <(echo "$files" | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$')
-while read -r f; do bad "forbidden file: $f"; done < <(echo "$files" | grep -iE '\.(pem|key|p12|pfx|sql|dump|bak)$|(^|/)(CLAUDE|CONTEXT|ESTADO)[^/]*\.md$|(^|/)\.claude/|napkin' | grep -v '^prisma/migrations/')
+while read -r f; do bad "forbidden file: $f"; done < <(echo "$files" | grep -iE '\.(pem|key|p12|pfx|sql|dump|bak)$|(^|/)\.claude/|napkin' | grep -v '^prisma/migrations/')
+# Internal-notes files are matched case-sensitively (CLAUDE.md, CONTEXT*.md, ESTADO*.md), so docs such as clients/claude-code.md are not flagged.
+while read -r f; do bad "forbidden file: $f"; done < <(echo "$files" | grep -E '(^|/)(CLAUDE|CONTEXT|ESTADO)[^/]*\.md$')
 
 note "3. e-mail addresses outside the fictional allow-list"
 while read -r l; do bad "e-mail: $l"; done < <(grep -rInoE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "${GREP_EXCLUDES[@]}" . \
