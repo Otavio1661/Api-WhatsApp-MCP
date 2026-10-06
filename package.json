@@ -31,7 +31,9 @@
     "db:seed": "tsx prisma/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:cov": "vitest run --coverage"
+    "test:cov": "vitest run --coverage",
+    "docs:mcp-tools": "tsx scripts/gen-mcp-tools-doc.ts",
+    "docs:mcp-tools:check": "tsx scripts/gen-mcp-tools-doc.ts --check"
   },
   "dependencies": {
     "@fastify/compress": "^9.2.0",

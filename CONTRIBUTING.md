@@ -22,6 +22,7 @@ bash scripts/check-no-secrets.sh
 ```
 
 - Keep changes focused; add or update tests for behaviour changes.
+- If you add or change an MCP tool, run `npm run docs:mcp-tools` and commit the regenerated `docs/mcp-tools.md` (CI runs `npm run docs:mcp-tools:check`).
 - Database changes need a new Prisma migration (`npx prisma migrate dev --name <change>`);
   never edit `prisma/migrations/0_init`.
 - Never commit secrets, real phone numbers, real e-mail addresses or production data. Use

@@ -126,11 +126,37 @@ addresses are rejected).
 ## MCP server (AI assistants)
 
 `POST /mcp` exposes **30 tools** (instances, messages, inbound messages, campaigns,
-webhooks, members, metrics) over Streamable HTTP with **OAuth 2.1 + PKCE**. Every tool
-calls the regular REST route with the logged-in user's JWT, so tenant scoping,
-role checks and anti-flood apply exactly as in the API. An optional **WhatsApp ↔ assistant
-bridge** lets a connected assistant answer messages on your behalf (fully
-configurable). See [docs/mcp.md](docs/mcp.md).
+webhooks, members, metrics) over Streamable HTTP (stateless) with **OAuth 2.1 + PKCE** and
+Dynamic Client Registration. Every tool calls the regular REST route with the logged-in
+user's JWT, so tenant scoping, role checks and anti-flood apply exactly as in the API. An
+optional **WhatsApp <-> assistant bridge** lets a connected assistant answer messages on
+your behalf (fully configurable).
+
+Quick start (replace the URL with your public HTTPS API URL):
+
+```bash
+# Claude Code
+claude mcp add --transport http apienvios https://api.example.com/mcp   # then run /mcp to log in
+
+# OpenAI Codex CLI
+codex mcp add apienvios --url https://api.example.com/mcp
+codex mcp login apienvios --oauth-client-registration dcr
+```
+
+| Client | Status of the connection guide |
+|---|---|
+| [Claude Code](docs/mcp/clients/claude-code.md) | Verified against the vendor docs |
+| [claude.ai / Claude Desktop](docs/mcp/clients/claude-ai-desktop.md) | Verified against the vendor docs |
+| [OpenAI Codex](docs/mcp/clients/codex.md) | Verified against the vendor docs |
+| [Cursor](docs/mcp/clients/cursor.md) | Verified; the vendor says DCR is unsupported, workaround untested |
+| [Windsurf](docs/mcp/clients/windsurf.md), [Gemini CLI](docs/mcp/clients/gemini-cli.md), [Zed](docs/mcp/clients/zed.md) | Verified against the vendor docs |
+| [ChatGPT](docs/mcp/clients/chatgpt.md), [VS Code](docs/mcp/clients/vscode.md), [Cline](docs/mcp/clients/cline.md), [Continue](docs/mcp/clients/continue.md) | Partial (some points unconfirmed) |
+| [Any stdio-only client](docs/mcp/clients/mcp-remote.md) | Via the `mcp-remote` bridge |
+
+Full documentation (Brazilian Portuguese, with an [English summary](docs/en/mcp-overview.md)):
+[how it works](docs/mcp/overview.md), [connect a client](docs/mcp/connect.md),
+[tool reference](docs/mcp-tools.md), [security](docs/mcp/security.md),
+[troubleshooting](docs/mcp/troubleshooting.md) and [examples](docs/mcp/examples.md).
 
 ## Secrets encrypted at rest
 
@@ -157,7 +183,10 @@ users. A user with an `externalId` and no registered provider cannot log in.
 - [docs/self-hosting.md](docs/self-hosting.md) — deploy, reverse proxy, upgrades, backups
 - [docs/configuration.md](docs/configuration.md) — every environment variable
 - [docs/providers.md](docs/providers.md) — Evolution API, WuzAPI, WhatsApp Cloud API
-- [docs/mcp.md](docs/mcp.md) — MCP server, OAuth, tools, WhatsApp bridge, troubleshooting
+- [docs/mcp/overview.md](docs/mcp/overview.md) — MCP: how it works, OAuth flow, sessions, limits, WhatsApp bridge (pt-BR; [English summary](docs/en/mcp-overview.md))
+- [docs/mcp/connect.md](docs/mcp/connect.md) — connect Claude Code, Codex, Cursor, Gemini CLI and more
+- [docs/mcp-tools.md](docs/mcp-tools.md) — reference of the 30 tools (generated from the code)
+- [docs/mcp/security.md](docs/mcp/security.md), [docs/mcp/troubleshooting.md](docs/mcp/troubleshooting.md), [docs/mcp/examples.md](docs/mcp/examples.md)
 - [docs/security.md](docs/security.md) — security model and hardening checklist
 
 ## Tests
@@ -165,6 +194,7 @@ users. A user with an `externalId` and no registered provider cannot log in.
 ```bash
 npm test          # vitest (unit + integration with mocked Prisma/Redis; no infrastructure needed)
 npm run build     # type-check + compile
+npm run docs:mcp-tools:check   # fails if docs/mcp-tools.md is out of date (regenerate with npm run docs:mcp-tools)
 ```
 
 ## Contributing and security

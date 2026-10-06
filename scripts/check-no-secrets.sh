@@ -32,24 +32,23 @@ fi
 note "2. forbidden files tracked by git"
 files=$(git ls-files 2>/dev/null || find . -type f -not -path './node_modules/*' -not -path './.git/*')
 files=$(echo "$files" | sed 's#^\./##')
-echo "$files" | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$' | while read -r f; do bad "env file: $f"; done
-echo "$files" | grep -iE '\.(pem|key|p12|pfx|sql|dump|bak)$|(^|/)(CLAUDE|CONTEXT|ESTADO)[^/]*\.md$|(^|/)\.claude/|napkin' | grep -v '^prisma/migrations/' | while read -r f; do bad "forbidden file: $f"; done
+# Findings are read with process substitution (not a pipe) so that bad() can set $fail in this shell.
+while read -r f; do bad "env file: $f"; done < <(echo "$files" | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$')
+while read -r f; do bad "forbidden file: $f"; done < <(echo "$files" | grep -iE '\.(pem|key|p12|pfx|sql|dump|bak)$|(^|/)(CLAUDE|CONTEXT|ESTADO)[^/]*\.md$|(^|/)\.claude/|napkin' | grep -v '^prisma/migrations/')
 
 note "3. e-mail addresses outside the fictional allow-list"
-grep -rInoE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "${GREP_EXCLUDES[@]}" . \
+while read -r l; do bad "e-mail: $l"; done < <(grep -rInoE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "${GREP_EXCLUDES[@]}" . \
   | grep -viE '@(example\.(com|org)|exemplo\.com|a\.com|b\.com|x\.com|tenant-a\.com|conta\.com|empresa\.com|acme\.com|dev\.local|users\.noreply\.github\.com|s\.whatsapp\.net|g\.us|github\.com|\w+\.local)\b' \
-  | grep -vE '@(fastify|prisma|types|vitest|modelcontextprotocol)/' | while read -r l; do bad "e-mail: $l"; done
+  | grep -vE '@(fastify|prisma|types|vitest|modelcontextprotocol)/')
 
 note "4. phone numbers outside the fictional allow-list"
-grep -rInoE '\b55[0-9]{10,11}\b' "${GREP_EXCLUDES[@]}" . \
-  | grep -vE ':(5544999990000|5544999990001|5544988880000|5544000000000|5544911110000|554499990000|5511999999999|5544977770013|554477770013|554466660042)$' \
-  | while read -r l; do bad "phone-like number: $l"; done
+while read -r l; do bad "phone-like number: $l"; done < <(grep -rInoE '\b55[0-9]{10,11}\b' "${GREP_EXCLUDES[@]}" . \
+  | grep -vE ':(5544999990000|5544999990001|5544988880000|5544000000000|5544911110000|554499990000|5511999999999|5544977770013|554477770013|554466660042)$')
 
 note "5. public-looking IPv4 addresses"
-grep -rInoE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "${GREP_EXCLUDES[@]}" . \
+while read -r l; do bad "IPv4: $l"; done < <(grep -rInoE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "${GREP_EXCLUDES[@]}" . \
   | grep -vE ':(8\.8\.8\.8|93\.184\.216\.34)$' \
-  | grep -vE ':(127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.0\.2\.|169\.254\.|255\.|1\.0\.0\.|2\.1\.0)' \
-  | while read -r l; do bad "IPv4: $l"; done
+  | grep -vE ':(127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.0\.2\.|169\.254\.|255\.|1\.0\.0\.|2\.1\.0)')
 
 note "6. private project-specific patterns (LEAK_PATTERNS_FILE)"
 if [ -n "${LEAK_PATTERNS_FILE:-}" ] && [ -f "$LEAK_PATTERNS_FILE" ]; then
@@ -66,7 +65,7 @@ fi
 note "7. commit authorship"
 if git rev-parse --git-dir >/dev/null 2>&1; then
   git log --all --format='%an <%ae> | %cn <%ce>' | sort -u
-  git log --all --format='%ae%n%ce' | sort -u | grep -vE '@users\.noreply\.github\.com$|^noreply@github\.com$' | while read -r e; do bad "non-noreply commit e-mail: $e"; done
+  while read -r e; do bad "non-noreply commit e-mail: $e"; done < <(git log --all --format='%ae%n%ce' | sort -u | grep -vE '@users\.noreply\.github\.com$|^noreply@github\.com$')
 fi
 
 echo

@@ -24,6 +24,7 @@ jobs:
           DATABASE_URL: postgresql://localhost:5432/db
           DIRECT_DATABASE_URL: postgresql://localhost:5432/db
       - run: npm run build
+      - run: npm run docs:mcp-tools:check
       - run: npm test
 
   secret-scan:
