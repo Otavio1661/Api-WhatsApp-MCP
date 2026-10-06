@@ -78,8 +78,34 @@ npm run dev
 ## Painel web (`/admin`)
 
 Login com JWT (cookie httpOnly). Telas por papel: **Instâncias** (status derivado do
-pool), **Docs** (referência da API filtrada por papel), **Equipe** (OWNER: membros e donos
-de instâncias) e **Administração** (super admin: contas e usuários).
+pool), **Monitor** (campanhas e mensagens), **Webhooks**, **Docs** (referência da API filtrada
+por papel, com a seção **MCP** para conectar assistentes de IA), **Equipe** (OWNER: membros e
+donos de instâncias) e **Administração** (super admin: contas e usuários).
+
+### Capturas de tela
+
+Pool de números de uma instância, com o status de cada conexão:
+
+![Painel: pool de números de uma instância, com status de conexão e envio de mensagem de teste](docs/images/painel-pool-de-numeros.png)
+
+Monitor de campanhas (lotes) e mensagens recentes:
+
+![Painel: monitor de campanhas em lote e mensagens recentes](docs/images/painel-monitor-campanhas.png)
+
+Cadastro e acompanhamento de webhooks:
+
+![Painel: cadastro de webhooks por evento e lista de webhooks cadastrados](docs/images/painel-webhooks.png)
+
+Página Docs, seção MCP: URL do ambiente e comandos de conexão (Claude Code e Codex):
+
+![Painel: documentação do MCP com a URL do ambiente e a conexão rápida](docs/images/docs-mcp-conexao.png)
+
+Referência das 30 ferramentas do MCP, gerada a partir do código:
+
+![Painel: tabela com as 30 ferramentas do MCP, rota REST, permissão e se são destrutivas](docs/images/docs-mcp-ferramentas.png)
+
+> Capturas de uma instância de demonstração com dados fictícios e um provedor simulado;
+> os status de conexão e os números são de exemplo, não representam uso real.
 
 ## API REST (resumo)
 
