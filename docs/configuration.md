@@ -20,7 +20,7 @@ desenvolvimento, o app se recusa a iniciar com os valores padrão de `JWT_SECRET
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | `localhost` / `6379` / — | Redis para filas e cache |
 | `EVOLUTION_API_URL` / `EVOLUTION_API_KEY` | `http://localhost:8080` / — | Provedor Evolution API (ativado quando a chave está definida) |
 | `WUZAPI_URL` / `WUZAPI_ADMIN_TOKEN` | `http://localhost:8888` / — | Provedor WuzAPI |
-| `WA_CLOUD_TOKEN` / `WA_CLOUD_PHONE_NUMBER_ID` | — | Provedor WhatsApp Cloud API |
+| `WA_CLOUD_TOKEN` / `WA_CLOUD_PHONE_NUMBER_ID` | — | Reservadas para a WhatsApp Cloud API (planejado, ainda não integrado) |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` | — / `gemini-flash-lite-latest` | Transcrição de áudio opcional para a ponte do MCP |
 | `SEND_DELAY_MIN` / `SEND_DELAY_MAX` | `2000` / `5000` | Atraso aleatório (ms) entre envios do mesmo número |
 | `MAX_MESSAGES_PER_NUMBER_DAY` | `200` | Limite diário por número |

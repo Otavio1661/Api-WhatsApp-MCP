@@ -19,12 +19,12 @@ Conta (ApiClient / tenant)
         └── Números (InstanceNumber)    ── cada número = uma sessão real em um provedor
               ├── 1. Evolution API   (texto/mídia, principal)
               ├── 2. WuzAPI          (texto/mídia + botões, localização, contato, enquetes, listas)
-              └── 3. WhatsApp Cloud  (oficial, fallback pago)
+              └── 3. WhatsApp Cloud  (API oficial: PLANEJADO, ainda não integrado)
 ```
 
 Você envia para uma **instância** e o roteador escolhe o melhor número **CONNECTED**
 (rodízio anti-ban), preferindo um número **WuzAPI** quando o conteúdo exige recursos ricos
-(botões / localização / contato / enquete / lista). Evolution e Cloud API não suportam esses
+(botões / localização / contato / enquete / lista). A Evolution não suporta esses
 tipos e falham de forma explícita (nunca degradam em silêncio para texto). Quando um ban é
 detectado, o número passa para `BANNED` e um webhook é disparado.
 
@@ -210,7 +210,7 @@ correspondentes. Um usuário com `externalId` e sem provider registrado não con
 
 - [docs/self-hosting.md](docs/self-hosting.md) — deploy, proxy reverso, atualizações, backups
 - [docs/configuration.md](docs/configuration.md) — todas as variáveis de ambiente
-- [docs/providers.md](docs/providers.md) — Evolution API, WuzAPI, WhatsApp Cloud API
+- [docs/providers.md](docs/providers.md) — Evolution API, WuzAPI e o plano da WhatsApp Cloud API
 - [docs/mcp/overview.md](docs/mcp/overview.md) — MCP: como funciona, fluxo OAuth, sessões, limites, ponte WhatsApp
 - [docs/mcp/connect.md](docs/mcp/connect.md) — conectar Claude Code, Codex, Cursor, Gemini CLI e outros
 - [docs/mcp-tools.md](docs/mcp-tools.md) — referência das 30 tools (gerada a partir do código)

@@ -8,7 +8,12 @@ conta (`ApiClient.fallbackEnabled`).
 |---|---|---|---|
 | [Evolution API](https://github.com/EvolutionAPI/evolution-api) | `EVOLUTION` | texto, mídia, figurinhas | `EVOLUTION_API_URL`, `EVOLUTION_API_KEY` |
 | [WuzAPI](https://github.com/asternic/wuzapi) | `WUZAPI` | texto, mídia, **botões, localização, contato, enquetes, listas** | `WUZAPI_URL`, `WUZAPI_ADMIN_TOKEN` |
-| WhatsApp Cloud API (oficial) | `CLOUD_API` | texto, mídia; pago | `WA_CLOUD_TOKEN`, `WA_CLOUD_PHONE_NUMBER_ID` |
+| WhatsApp Cloud API (oficial) | `CLOUD_API` | **planejado, não integrado** | `WA_CLOUD_TOKEN`, `WA_CLOUD_PHONE_NUMBER_ID` (reservadas) |
+
+> **Status da API oficial (WhatsApp Cloud API):** é um plano, não uma funcionalidade pronta.
+> Existe um esqueleto de código e as variáveis de ambiente reservadas, mas a integração nunca
+> foi concluída nem testada contra a Meta. Hoje os provedores em uso e testados são a Evolution
+> API e o WuzAPI. Não conte com a Cloud API em produção.
 
 Regras do roteador:
 

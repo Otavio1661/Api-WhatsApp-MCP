@@ -26,7 +26,7 @@ flowchart LR
     C -- "app.inject()<br/>mesmo JWT" --> D[Rotas REST /v1/*<br/>auth, papéis, anti-flood]
     D --> E[(PostgreSQL)]
     D --> F[(Redis / BullMQ)]
-    F --> G[Provedores de WhatsApp<br/>Evolution, WuzAPI, Cloud API]
+    F --> G[Provedores de WhatsApp<br/>Evolution, WuzAPI (Cloud API planejada)]
 ```
 
 Pontos importantes do desenho:
