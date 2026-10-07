@@ -45,7 +45,7 @@ while read -r l; do bad "e-mail: $l"; done < <(grep -rInoE '[A-Za-z0-9._%+-]+@[A
 
 note "4. números de telefone fora da lista de fictícios permitidos"
 while read -r l; do bad "número parecido com telefone: $l"; done < <(grep -rInoE '\b55[0-9]{10,11}\b' "${GREP_EXCLUDES[@]}" . \
-  | grep -vE ':(5544999990000|5544999990001|5544988880000|5544000000000|5544911110000|554499990000|5511999999999|5544977770013|554477770013|554466660042)$')
+  | grep -vE ':(5544999990000|5544999990001|5544988880000|5544000000000|5544911110000|554499990000|5511999999999|5544977770013|554477770013|554466660042|5500000000[0-9]{3})$')
 
 note "5. endereços IPv4 que parecem públicos"
 while read -r l; do bad "IPv4: $l"; done < <(grep -rInoE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "${GREP_EXCLUDES[@]}" . \

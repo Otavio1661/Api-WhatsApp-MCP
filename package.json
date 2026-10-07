@@ -39,7 +39,9 @@
     "docs:mcp-tools": "tsx scripts/gen-mcp-tools-doc.ts",
     "docs:mcp-tools:check": "tsx scripts/gen-mcp-tools-doc.ts --check",
     "docs:panel-mcp": "tsx scripts/gen-panel-mcp-docs.ts",
-    "docs:panel-mcp:check": "tsx scripts/gen-panel-mcp-docs.ts --check"
+    "docs:panel-mcp:check": "tsx scripts/gen-panel-mcp-docs.ts --check",
+    "demo:provider": "node scripts/demo/mock-provider.mjs",
+    "demo:seed": "tsx scripts/demo/seed-demo.ts"
   },
   "dependencies": {
     "@fastify/compress": "^9.2.0",

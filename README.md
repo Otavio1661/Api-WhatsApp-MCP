@@ -104,6 +104,8 @@ Referência das 30 ferramentas do MCP, gerada a partir do código:
 
 ![Painel: tabela com as 30 ferramentas do MCP, rota REST, permissão e se são destrutivas](docs/images/docs-mcp-ferramentas.png)
 
+> Quer ver o painel com esses mesmos dados no seu computador? Veja o [modo demonstração](docs/demo.md).
+
 > Capturas de uma instância de demonstração com dados fictícios e um provedor simulado;
 > os status de conexão e os números são de exemplo, não representam uso real.
 
